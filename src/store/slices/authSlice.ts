@@ -16,9 +16,10 @@ const initialState: AuthState = {
   error: null,
 };
 
-// In local dev mode, use localStorage for passcode validation
-const LOCAL_PASSCODE = 'draftwise2024';
-const LOCAL_ADMIN_CODE = 'admin2024';
+// In local dev mode, use environment variables or defaults for passcode validation
+// For production, these should come from AWS Secrets Manager via API
+const LOCAL_PASSCODE = import.meta.env.VITE_LOCAL_PASSCODE || 'CHANGE_ME_IN_PRODUCTION';
+const LOCAL_ADMIN_CODE = import.meta.env.VITE_LOCAL_ADMIN_CODE || 'CHANGE_ME_IN_PRODUCTION';
 
 export const validatePasscode = createAsyncThunk(
   'auth/validatePasscode',
