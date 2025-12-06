@@ -1,0 +1,267 @@
+import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import { v4 as uuidv4 } from 'uuid';
+
+export interface Snapshot {
+  id: string;
+  documentId: string;
+  content: string;
+  title: string;
+  createdAt: string;
+  isAutoSave: boolean;
+}
+
+export interface Document {
+  id: string;
+  title: string;
+  content: string;
+  status: 'draft' | 'review' | 'final';
+  domainId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  lastAutosaveAt: string | null;
+}
+
+interface DocumentState {
+  currentDocument: Document | null;
+  snapshots: Snapshot[];
+  editorState: unknown | null;
+  isDirty: boolean;
+  isAutosaving: boolean;
+  loading: boolean;
+  error: string | null;
+}
+
+const initialState: DocumentState = {
+  currentDocument: null,
+  snapshots: [],
+  editorState: null,
+  isDirty: false,
+  isAutosaving: false,
+  loading: false,
+  error: null,
+};
+
+// Maximum snapshots per document
+const MAX_SNAPSHOTS = 20;
+
+export const createDocument = createAsyncThunk(
+  'document/create',
+  async (title: string, { rejectWithValue }) => {
+    try {
+      const now = new Date().toISOString();
+      const document: Document = {
+        id: uuidv4(),
+        title,
+        content: '',
+        status: 'draft',
+        domainId: null,
+        createdAt: now,
+        updatedAt: now,
+        lastAutosaveAt: null,
+      };
+
+      // In production, this would save to DynamoDB via API
+      localStorage.setItem(`doc_${document.id}`, JSON.stringify(document));
+      return document;
+    } catch (error) {
+      return rejectWithValue('Failed to create document');
+    }
+  }
+);
+
+export const loadDocument = createAsyncThunk(
+  'document/load',
+  async (documentId: string, { rejectWithValue }) => {
+    try {
+      // In production, this would load from DynamoDB via API
+      const stored = localStorage.getItem(`doc_${documentId}`);
+      if (stored) {
+        return JSON.parse(stored) as Document;
+      }
+      return rejectWithValue('Document not found');
+    } catch (error) {
+      return rejectWithValue('Failed to load document');
+    }
+  }
+);
+
+export const saveDocument = createAsyncThunk(
+  'document/save',
+  async (
+    { document, isAutosave }: { document: Document; isAutosave: boolean },
+    { getState, rejectWithValue }
+  ) => {
+    try {
+      const now = new Date().toISOString();
+      const updatedDocument = {
+        ...document,
+        updatedAt: now,
+        lastAutosaveAt: isAutosave ? now : document.lastAutosaveAt,
+      };
+
+      // In production, this would save to DynamoDB via API
+      localStorage.setItem(`doc_${document.id}`, JSON.stringify(updatedDocument));
+      return { document: updatedDocument, isAutosave };
+    } catch (error) {
+      return rejectWithValue('Failed to save document');
+    }
+  }
+);
+
+export const createSnapshot = createAsyncThunk(
+  'document/createSnapshot',
+  async (
+    { documentId, content, title, isAutoSave }: { documentId: string; content: string; title?: string; isAutoSave: boolean },
+    { getState, rejectWithValue }
+  ) => {
+    try {
+      const snapshot: Snapshot = {
+        id: uuidv4(),
+        documentId,
+        content,
+        title: title || `Snapshot ${new Date().toLocaleString()}`,
+        createdAt: new Date().toISOString(),
+        isAutoSave,
+      };
+
+      // Get existing snapshots and enforce rolling cap
+      const state = getState() as { document: DocumentState };
+      let snapshots = [...state.document.snapshots, snapshot];
+
+      // Remove oldest snapshots if over limit
+      if (snapshots.length > MAX_SNAPSHOTS) {
+        snapshots = snapshots
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .slice(0, MAX_SNAPSHOTS);
+      }
+
+      // In production, this would save to DynamoDB via API
+      localStorage.setItem(`snapshots_${documentId}`, JSON.stringify(snapshots));
+      return snapshot;
+    } catch (error) {
+      return rejectWithValue('Failed to create snapshot');
+    }
+  }
+);
+
+export const loadSnapshots = createAsyncThunk(
+  'document/loadSnapshots',
+  async (documentId: string, { rejectWithValue }) => {
+    try {
+      // In production, this would load from DynamoDB via API
+      const stored = localStorage.getItem(`snapshots_${documentId}`);
+      if (stored) {
+        return JSON.parse(stored) as Snapshot[];
+      }
+      return [];
+    } catch (error) {
+      return rejectWithValue('Failed to load snapshots');
+    }
+  }
+);
+
+const documentSlice = createSlice({
+  name: 'document',
+  initialState,
+  reducers: {
+    setEditorState: (state, action: PayloadAction<unknown>) => {
+      state.editorState = action.payload;
+      state.isDirty = true;
+    },
+    updateContent: (state, action: PayloadAction<string>) => {
+      if (state.currentDocument) {
+        state.currentDocument.content = action.payload;
+        state.isDirty = true;
+      }
+    },
+    updateTitle: (state, action: PayloadAction<string>) => {
+      if (state.currentDocument) {
+        state.currentDocument.title = action.payload;
+        state.isDirty = true;
+      }
+    },
+    setDomainId: (state, action: PayloadAction<string>) => {
+      if (state.currentDocument) {
+        state.currentDocument.domainId = action.payload;
+        state.isDirty = true;
+      }
+    },
+    markClean: (state) => {
+      state.isDirty = false;
+    },
+    clearDocument: (state) => {
+      state.currentDocument = null;
+      state.snapshots = [];
+      state.editorState = null;
+      state.isDirty = false;
+    },
+  },
+  extraReducers: (builder) => {
+    builder
+      // Create document
+      .addCase(createDocument.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(createDocument.fulfilled, (state, action: PayloadAction<Document>) => {
+        state.loading = false;
+        state.currentDocument = action.payload;
+        state.snapshots = [];
+        state.isDirty = false;
+      })
+      .addCase(createDocument.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload as string;
+      })
+      // Load document
+      .addCase(loadDocument.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(loadDocument.fulfilled, (state, action: PayloadAction<Document>) => {
+        state.loading = false;
+        state.currentDocument = action.payload;
+        state.isDirty = false;
+      })
+      .addCase(loadDocument.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload as string;
+      })
+      // Save document
+      .addCase(saveDocument.pending, (state, action) => {
+        if (action.meta.arg.isAutosave) {
+          state.isAutosaving = true;
+        }
+      })
+      .addCase(saveDocument.fulfilled, (state, action) => {
+        state.currentDocument = action.payload.document;
+        state.isDirty = false;
+        state.isAutosaving = false;
+      })
+      .addCase(saveDocument.rejected, (state, action) => {
+        state.isAutosaving = false;
+        state.error = action.payload as string;
+      })
+      // Load snapshots
+      .addCase(loadSnapshots.fulfilled, (state, action: PayloadAction<Snapshot[]>) => {
+        state.snapshots = action.payload;
+      })
+      // Create snapshot
+      .addCase(createSnapshot.fulfilled, (state, action: PayloadAction<Snapshot>) => {
+        state.snapshots = [action.payload, ...state.snapshots].slice(0, MAX_SNAPSHOTS);
+      });
+  },
+});
+
+export const {
+  setEditorState,
+  updateContent,
+  updateTitle,
+  setDomainId,
+  markClean,
+  clearDocument,
+} = documentSlice.actions;
+
+export default documentSlice.reducer;
+
+
