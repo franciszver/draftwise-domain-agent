@@ -11,7 +11,10 @@ import './index.css';
 // Configure Amplify with outputs from amplify_outputs.json
 // This file is generated automatically during Amplify deployments
 // For local development, run 'npx ampx sandbox' first to generate it
-Amplify.configure(outputs);
+// Only configure if we have actual backend configuration
+if (outputs && Object.keys(outputs).length > 1) {
+  Amplify.configure(outputs);
+}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
