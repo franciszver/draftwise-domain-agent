@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, EnhancedStore } from '@reduxjs/toolkit';
 import authReducer, {
   validatePasscode,
   validateAdminCode,
@@ -7,8 +7,16 @@ import authReducer, {
   clearError,
 } from '../../store/slices/authSlice';
 
+interface AuthState {
+  isAuthenticated: boolean;
+  isAdmin: boolean;
+  sessionToken: string | null;
+  loading: boolean;
+  error: string | null;
+}
+
 describe('authSlice', () => {
-  let store: ReturnType<typeof configureStore>;
+  let store: EnhancedStore<{ auth: AuthState }>;
 
   beforeEach(() => {
     store = configureStore({
@@ -40,7 +48,7 @@ describe('authSlice', () => {
         console.warn('Skipping test: VITE_LOCAL_PASSCODE not set');
         return;
       }
-      await store.dispatch(validatePasscode(TEST_PASSCODE));
+      await store.dispatch(validatePasscode(TEST_PASSCODE) as any);
       const state = store.getState().auth;
       expect(state.isAuthenticated).toBe(true);
       expect(state.sessionToken).toBeTruthy();
@@ -48,7 +56,7 @@ describe('authSlice', () => {
     });
 
     it('should reject invalid passcode', async () => {
-      await store.dispatch(validatePasscode('wrongpasscode'));
+      await store.dispatch(validatePasscode('wrongpasscode') as any);
       const state = store.getState().auth;
       expect(state.isAuthenticated).toBe(false);
       expect(state.error).toBe('Invalid passcode');
@@ -59,7 +67,7 @@ describe('authSlice', () => {
         console.warn('Skipping test: VITE_LOCAL_PASSCODE not set');
         return;
       }
-      store.dispatch(validatePasscode(TEST_PASSCODE));
+      store.dispatch(validatePasscode(TEST_PASSCODE) as any);
       // Note: This is async, so we check pending state
       // In real tests, we'd mock the async thunk
     });
@@ -72,14 +80,14 @@ describe('authSlice', () => {
         console.warn('Skipping test: VITE_LOCAL_ADMIN_CODE not set');
         return;
       }
-      await store.dispatch(validateAdminCode(TEST_ADMIN_CODE));
+      await store.dispatch(validateAdminCode(TEST_ADMIN_CODE) as any);
       const state = store.getState().auth;
       expect(state.isAdmin).toBe(true);
       expect(state.error).toBeNull();
     });
 
     it('should reject invalid admin code', async () => {
-      await store.dispatch(validateAdminCode('wrongcode'));
+      await store.dispatch(validateAdminCode('wrongcode') as any);
       const state = store.getState().auth;
       expect(state.isAdmin).toBe(false);
       expect(state.error).toBe('Invalid admin code');
@@ -93,7 +101,7 @@ describe('authSlice', () => {
         return;
       }
       // First authenticate
-      await store.dispatch(validatePasscode(TEST_PASSCODE));
+      await store.dispatch(validatePasscode(TEST_PASSCODE) as any);
       expect(store.getState().auth.isAuthenticated).toBe(true);
 
       // Then logout
@@ -109,7 +117,7 @@ describe('authSlice', () => {
         console.warn('Skipping test: VITE_LOCAL_PASSCODE not set');
         return;
       }
-      await store.dispatch(validatePasscode(TEST_PASSCODE));
+      await store.dispatch(validatePasscode(TEST_PASSCODE) as any);
       expect(localStorage.getItem('draftwise_session')).toBeTruthy();
 
       store.dispatch(logout());
@@ -120,7 +128,7 @@ describe('authSlice', () => {
   describe('clearError', () => {
     it('should clear error state', async () => {
       // Create an error
-      await store.dispatch(validatePasscode('wrongpasscode'));
+      await store.dispatch(validatePasscode('wrongpasscode') as any);
       expect(store.getState().auth.error).toBeTruthy();
 
       // Clear the error

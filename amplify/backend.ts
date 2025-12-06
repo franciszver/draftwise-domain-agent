@@ -19,9 +19,6 @@ const backend = defineBackend({
   retentionCleanup,
 });
 
-// Configure additional AWS resources
-const { cfnResources } = backend.data.resources;
-
 // Add custom outputs for the frontend
 backend.addOutput({
   custom: {

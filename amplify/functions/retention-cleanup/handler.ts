@@ -22,9 +22,9 @@ async function cleanupExpiredDocuments(retentionDays: number): Promise<number> {
   // and delete them along with their associated snapshots
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-  
+
   console.log(`Cleaning up documents older than ${cutoffDate.toISOString()}`);
-  
+
   // Placeholder - actual implementation would use DynamoDB SDK
   return 0;
 }
@@ -32,25 +32,25 @@ async function cleanupExpiredDocuments(retentionDays: number): Promise<number> {
 async function cleanupExpiredSuggestions(retentionDays: number): Promise<number> {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-  
+
   console.log(`Cleaning up suggestions older than ${cutoffDate.toISOString()}`);
-  
+
   return 0;
 }
 
 async function cleanupExpiredSources(retentionDays: number): Promise<number> {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-  
+
   console.log(`Cleaning up sources older than ${cutoffDate.toISOString()}`);
-  
+
   return 0;
 }
 
 async function cleanupExpiredShareLinks(): Promise<number> {
   // Share links have TTL set in DynamoDB, but we clean up any stragglers
   console.log('Cleaning up expired share links');
-  
+
   return 0;
 }
 
@@ -59,7 +59,7 @@ async function cleanupS3Attachments(): Promise<void> {
   console.log('Verifying S3 attachment cleanup');
 }
 
-export const handler: Handler = async (event) => {
+export const handler: Handler = async (_event) => {
   console.log('Starting retention cleanup job');
 
   const result: CleanupResult = {
