@@ -1,9 +1,3 @@
-import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
-import { FORMAT_TEXT_COMMAND, FORMAT_ELEMENT_COMMAND } from 'lexical';
-import {
-  INSERT_ORDERED_LIST_COMMAND,
-  INSERT_UNORDERED_LIST_COMMAND,
-} from '@lexical/list';
 import { useCallback } from 'react';
 
 interface EditorToolbarProps {
@@ -128,9 +122,8 @@ function ToolbarButton({ icon, tooltip, command, active }: ToolbarButtonProps) {
   return (
     <button
       onClick={handleClick}
-      className={`p-2 rounded hover:bg-slate-200 transition-colors ${
-        active ? 'bg-slate-200 text-primary-600' : 'text-slate-600'
-      }`}
+      className={`p-2 rounded hover:bg-slate-200 transition-colors ${active ? 'bg-slate-200 text-primary-600' : 'text-slate-600'
+        }`}
       title={tooltip}
     >
       {icon}

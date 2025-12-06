@@ -1,10 +1,8 @@
 import { useCallback } from 'react';
-import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { loadDocument } from '../../store/slices/documentSlice';
+import { useAppSelector } from '../../store/hooks';
 import { formatDistanceToNow, format } from 'date-fns';
 
 export function HistoryPanel() {
-  const dispatch = useAppDispatch();
   const { snapshots, currentDocument } = useAppSelector((state) => state.document);
 
   const handleRestore = useCallback(

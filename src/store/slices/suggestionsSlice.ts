@@ -55,12 +55,13 @@ const initialState: SuggestionsState = {
 export const generateSuggestions = createAsyncThunk(
   'suggestions/generate',
   async (
-    { documentId, content, domainId }: { documentId: string; content: string; domainId: string },
+    { documentId, content: _content, domainId: _domainId }: { documentId: string; content: string; domainId: string },
     { getState, rejectWithValue }
   ) => {
     try {
       const state = getState() as { suggestions: SuggestionsState };
-      const { signals, approverPov } = state.suggestions;
+      // These would be used in production for API calls
+      const { signals: _signals, approverPov: _approverPov } = state.suggestions;
 
       // Simulate AI suggestion generation
       // In production, this would call the Lambda function

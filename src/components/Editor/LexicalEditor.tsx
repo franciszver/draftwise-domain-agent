@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
@@ -54,7 +54,7 @@ function onError(error: Error): void {
   console.error('Lexical error:', error);
 }
 
-export function LexicalEditor({ initialContent, onChange, readOnly = false }: LexicalEditorProps) {
+export function LexicalEditor({ initialContent: _initialContent, onChange, readOnly = false }: LexicalEditorProps) {
   const initialConfig = {
     namespace: 'DraftWiseEditor',
     theme,
@@ -73,7 +73,7 @@ export function LexicalEditor({ initialContent, onChange, readOnly = false }: Le
   };
 
   const handleChange = useCallback(
-    (editorState: EditorState, editor: LexicalEditorType) => {
+    (editorState: EditorState, _editor: LexicalEditorType) => {
       editorState.read(() => {
         const root = $getRoot();
         const textContent = root.getTextContent();

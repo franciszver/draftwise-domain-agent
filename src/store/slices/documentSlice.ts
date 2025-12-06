@@ -89,7 +89,7 @@ export const saveDocument = createAsyncThunk(
   'document/save',
   async (
     { document, isAutosave }: { document: Document; isAutosave: boolean },
-    { getState, rejectWithValue }
+    { rejectWithValue }
   ) => {
     try {
       const now = new Date().toISOString();

@@ -20,7 +20,7 @@ export function SharedViewPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [document, setDocument] = useState<SharedDocument | null>(null);
-  const [expired, setExpired] = useState(false);
+  const [expired, _setExpired] = useState(false);
 
   useEffect(() => {
     // Check if token exists and is valid

@@ -113,7 +113,7 @@ export const createDomain = createAsyncThunk(
 
 export const prepareDomain = createAsyncThunk(
   'domain/prepare',
-  async (domainId: string, { getState, dispatch, rejectWithValue }) => {
+  async (_domainId: string, { getState, dispatch, rejectWithValue }) => {
     try {
       const state = getState() as { domain: DomainState };
       const domain = state.domain.currentDomain;
