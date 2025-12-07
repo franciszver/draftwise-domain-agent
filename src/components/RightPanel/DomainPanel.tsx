@@ -1,23 +1,45 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
-import { createDomain, prepareDomain, abortPreparation } from '../../store/slices/domainSlice';
+import { createDomain, prepareDomain, abortPreparation, type Domain } from '../../store/slices/domainSlice';
 import { setDomainId } from '../../store/slices/documentSlice';
 import { setRightPanelTab } from '../../store/slices/uiSlice';
 import { countries, getRegionsForCountry } from '../../data/countries';
+import { SourcesModal } from '../Modals/SourcesModal';
 
 type Step = 'country' | 'site' | 'asset' | 'categories' | 'preparing' | 'ready';
 
+// Helper to determine step based on domain state
+function getStepFromDomain(domain: Domain | null): Step {
+  if (!domain) return 'country';
+  if (domain.prepStatus === 'ready') return 'ready';
+  if (domain.prepStatus === 'preparing') return 'preparing';
+  return 'country';
+}
+
 export function DomainPanel() {
   const dispatch = useAppDispatch();
-  const { currentDomain, categories, preparing } = useAppSelector((state) => state.domain);
+  const { currentDomain, categories, preparing, sources } = useAppSelector((state) => state.domain);
   const { currentDocument } = useAppSelector((state) => state.document);
 
-  const [step, setStep] = useState<Step>(currentDomain ? 'ready' : 'country');
+  const [step, setStep] = useState<Step>(() => getStepFromDomain(currentDomain));
+
+  // Sync step with domain prepStatus changes
+  useEffect(() => {
+    if (currentDomain) {
+      if (currentDomain.prepStatus === 'ready' && step === 'preparing') {
+        setStep('ready');
+        dispatch(setRightPanelTab('suggestions'));
+      } else if (currentDomain.prepStatus === 'preparing' && step !== 'preparing') {
+        setStep('preparing');
+      }
+    }
+  }, [currentDomain?.prepStatus, step, dispatch]);
   const [selectedCountry, setSelectedCountry] = useState('');
   const [selectedSite, setSelectedSite] = useState('');
   const [selectedAsset, setSelectedAsset] = useState('Datacenter');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [customJurisdiction, setCustomJurisdiction] = useState('');
+  const [showSourcesModal, setShowSourcesModal] = useState(false);
 
   const regions = selectedCountry ? getRegionsForCountry(selectedCountry) : [];
 
@@ -82,6 +104,8 @@ export function DomainPanel() {
 
   // Render current step
   if (step === 'ready' && currentDomain) {
+    const sourceCount = sources.length || currentDomain.citationsIndexed;
+
     return (
       <div className="h-full overflow-auto p-4">
         <div className="space-y-4">
@@ -92,9 +116,17 @@ export function DomainPanel() {
               </svg>
               <span className="font-medium">Domain Ready</span>
             </div>
-            <p className="text-sm text-slate-600">
-              {currentDomain.citationsIndexed} sources indexed
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-600">
+                {sourceCount} source{sourceCount !== 1 ? 's' : ''} indexed
+              </p>
+              <button
+                onClick={() => setShowSourcesModal(true)}
+                className="text-sm text-primary-600 hover:underline font-medium"
+              >
+                View Sources
+              </button>
+            </div>
           </div>
 
           <div className="card p-4 space-y-3">
@@ -125,6 +157,10 @@ export function DomainPanel() {
             Change Domain
           </button>
         </div>
+
+        {showSourcesModal && (
+          <SourcesModal onClose={() => setShowSourcesModal(false)} />
+        )}
       </div>
     );
   }
@@ -295,11 +331,10 @@ export function DomainPanel() {
               {categories.map((category) => (
                 <label
                   key={category.id}
-                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                    selectedCategories.includes(category.id)
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-slate-200 hover:border-slate-300'
-                  }`}
+                  className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${selectedCategories.includes(category.id)
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-slate-200 hover:border-slate-300'
+                    }`}
                 >
                   <input
                     type="checkbox"
@@ -351,13 +386,12 @@ function StepIndicator({
 }) {
   return (
     <div
-      className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-        complete
-          ? 'bg-primary-600 text-white'
-          : active
+      className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${complete
+        ? 'bg-primary-600 text-white'
+        : active
           ? 'bg-primary-100 text-primary-600 ring-2 ring-primary-600'
           : 'bg-slate-100 text-slate-400'
-      }`}
+        }`}
     >
       {complete ? (
         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { LexicalComposer } from '@lexical/react/LexicalComposer';
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin';
 import { ContentEditable } from '@lexical/react/LexicalContentEditable';
@@ -7,11 +7,12 @@ import { OnChangePlugin } from '@lexical/react/LexicalOnChangePlugin';
 import { ListPlugin } from '@lexical/react/LexicalListPlugin';
 import { TabIndentationPlugin } from '@lexical/react/LexicalTabIndentationPlugin';
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary';
+import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext';
 import { HeadingNode, QuoteNode } from '@lexical/rich-text';
 import { ListItemNode, ListNode } from '@lexical/list';
 import { LinkNode } from '@lexical/link';
 import { TableCellNode, TableNode, TableRowNode } from '@lexical/table';
-import { $getRoot, EditorState, LexicalEditor as LexicalEditorType } from 'lexical';
+import { $getRoot, $createParagraphNode, $createTextNode, EditorState, LexicalEditor as LexicalEditorType } from 'lexical';
 
 interface LexicalEditorProps {
   initialContent: string;
@@ -54,7 +55,35 @@ function onError(error: Error): void {
   console.error('Lexical error:', error);
 }
 
-export function LexicalEditor({ initialContent: _initialContent, onChange, readOnly = false }: LexicalEditorProps) {
+// Plugin to initialize editor with content
+function InitialContentPlugin({ content }: { content: string }) {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    if (content) {
+      editor.update(() => {
+        const root = $getRoot();
+        // Only set content if root is empty
+        if (root.getTextContent().trim() === '') {
+          root.clear();
+          // Split content by newlines and create paragraphs
+          const lines = content.split('\n');
+          lines.forEach((line) => {
+            const paragraph = $createParagraphNode();
+            if (line.trim()) {
+              paragraph.append($createTextNode(line));
+            }
+            root.append(paragraph);
+          });
+        }
+      });
+    }
+  }, [editor, content]);
+
+  return null;
+}
+
+export function LexicalEditor({ initialContent, onChange, readOnly = false }: LexicalEditorProps) {
   const initialConfig = {
     namespace: 'DraftWiseEditor',
     theme,
@@ -104,6 +133,7 @@ export function LexicalEditor({ initialContent: _initialContent, onChange, readO
         <ListPlugin />
         <TabIndentationPlugin />
         <OnChangePlugin onChange={handleChange} ignoreSelectionChange />
+        <InitialContentPlugin content={initialContent} />
       </div>
     </LexicalComposer>
   );

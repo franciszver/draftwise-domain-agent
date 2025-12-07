@@ -1,13 +1,13 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
-import { createDocument, loadDocument, loadSnapshots } from '../store/slices/documentSlice';
+import { createDocument, loadDocument, loadSnapshots, updateContent, setDomainId } from '../store/slices/documentSlice';
+import { createDomain, prepareDomain } from '../store/slices/domainSlice';
 import { setRightPanelTab } from '../store/slices/uiSlice';
 import { Header } from '../components/Layout/Header';
 import { EditorPanel } from '../components/Editor/EditorPanel';
 import { RightPanel } from '../components/RightPanel/RightPanel';
 import { NewDocumentModal } from '../components/Modals/NewDocumentModal';
-import { useState } from 'react';
 
 export function EditorPage() {
   const { documentId } = useParams<{ documentId: string }>();
@@ -35,12 +35,44 @@ export function EditorPage() {
   }, [documentId, dispatch, currentDocument, loading]);
 
   const handleCreateDocument = useCallback(
-    async (title: string) => {
-      const result = await dispatch(createDocument(title));
-      if (createDocument.fulfilled.match(result)) {
-        navigate(`/editor/${result.payload.id}`);
-        dispatch(setRightPanelTab('domain'));
+    async (
+      title: string,
+      domain: { country: string; site: string; assetClass: string; categories: string[] },
+      templateContent: string | null
+    ) => {
+      // Create the document
+      const docResult = await dispatch(createDocument(title));
+      if (!createDocument.fulfilled.match(docResult)) {
+        setShowNewDocModal(false);
+        return;
       }
+
+      const documentId = docResult.payload.id;
+
+      // If template content is provided, set it
+      if (templateContent) {
+        dispatch(updateContent(templateContent));
+      }
+
+      // Create and prepare the domain
+      const domainResult = await dispatch(
+        createDomain({
+          country: domain.country,
+          site: domain.site || undefined,
+          assetClass: domain.assetClass,
+          categories: domain.categories,
+        })
+      );
+
+      if (createDomain.fulfilled.match(domainResult)) {
+        dispatch(setDomainId(domainResult.payload.id));
+        // Start domain preparation in background
+        dispatch(prepareDomain(domainResult.payload.id));
+      }
+
+      navigate(`/editor/${documentId}`);
+      // Show domain tab first so user can see preparation progress
+      dispatch(setRightPanelTab('domain'));
       setShowNewDocModal(false);
     },
     [dispatch, navigate]

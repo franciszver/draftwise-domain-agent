@@ -14,5 +14,6 @@ export { HistoryPanel } from './RightPanel/HistoryPanel';
 
 // Modals
 export { NewDocumentModal } from './Modals/NewDocumentModal';
+export { SourcesModal } from './Modals/SourcesModal';
 
 

@@ -1,4 +1,7 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+import { sourceDiscovery } from '../functions/source-discovery/resource';
+import { ragRetrieval } from '../functions/rag-retrieval/resource';
+import { suggestionGenerator } from '../functions/suggestion-generator/resource';
 
 const schema = a.schema({
   // Document - Main planning document
@@ -134,6 +137,50 @@ const schema = a.schema({
       expiresAt: a.datetime().required(),
     })
     .authorization((allow) => [allow.publicApiKey()]),
+
+  // Custom Queries for Lambda Functions
+
+  // Source Discovery - Search and index regulatory sources
+  discoverSources: a
+    .query()
+    .arguments({
+      domainId: a.string().required(),
+      query: a.string().required(),
+      jurisdiction: a.string().required(),
+      category: a.string().required(),
+      maxSources: a.integer(),
+    })
+    .returns(a.json())
+    .authorization((allow) => [allow.publicApiKey()])
+    .handler(a.handler.function(sourceDiscovery)),
+
+  // RAG Retrieval - Retrieve relevant sources for a query
+  retrieveSources: a
+    .query()
+    .arguments({
+      query: a.string().required(),
+      domainId: a.string().required(),
+      topK: a.integer(),
+      categories: a.string().array(),
+    })
+    .returns(a.json())
+    .authorization((allow) => [allow.publicApiKey()])
+    .handler(a.handler.function(ragRetrieval)),
+
+  // Suggestion Generator - Generate AI suggestions
+  generateSuggestions: a
+    .query()
+    .arguments({
+      documentId: a.string().required(),
+      documentContent: a.string().required(),
+      domainId: a.string().required(),
+      signals: a.string().required(), // JSON stringified SignalValues
+      approverPov: a.string(),
+      retrievedSources: a.string(), // JSON stringified array
+    })
+    .returns(a.json())
+    .authorization((allow) => [allow.publicApiKey()])
+    .handler(a.handler.function(suggestionGenerator)),
 });
 
 export type Schema = ClientSchema<typeof schema>;

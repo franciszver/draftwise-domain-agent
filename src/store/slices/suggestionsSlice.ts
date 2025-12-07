@@ -1,5 +1,6 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { v4 as uuidv4 } from 'uuid';
+import * as api from '../../lib/api';
 
 export interface Suggestion {
   id: string;
@@ -52,80 +53,178 @@ const initialState: SuggestionsState = {
   error: null,
 };
 
-export const generateSuggestions = createAsyncThunk(
-  'suggestions/generate',
-  async (
-    { documentId, content: _content, domainId: _domainId }: { documentId: string; content: string; domainId: string },
-    { getState, rejectWithValue }
-  ) => {
-    try {
-      const state = getState() as { suggestions: SuggestionsState };
-      // These would be used in production for API calls
-      const { signals: _signals, approverPov: _approverPov } = state.suggestions;
+// Generate mock suggestions (fallback when backend unavailable)
+function generateMockSuggestions(
+  documentId: string,
+  validSourceUrls: Set<string>
+): Suggestion[] {
+  // Helper to filter source refs to only include valid sources
+  const filterValidSources = (refs: string[]) =>
+    refs.filter((ref) => {
+      for (const validUrl of validSourceUrls) {
+        try {
+          const refHost = new URL(ref).hostname;
+          const validHost = new URL(validUrl).hostname;
+          if (refHost === validHost) return true;
+        } catch {
+          // Invalid URL
+        }
+      }
+      return false;
+    });
 
-      // Simulate AI suggestion generation
-      // In production, this would call the Lambda function
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      const mockSuggestions: Suggestion[] = [
-        {
-          id: uuidv4(),
-          documentId,
-          type: 'structured',
-          title: 'Environmental Compliance Checklist',
-          content: `Based on your document content and selected regulatory domain:
+  return [
+    {
+      id: uuidv4(),
+      documentId,
+      type: 'structured',
+      title: 'Environmental Compliance Checklist',
+      content: `Based on your document content and selected regulatory domain:
 
 - [ ] Conduct Environmental Impact Assessment (EIA)
 - [ ] Obtain necessary environmental permits
 - [ ] Establish emissions monitoring protocols
 - [ ] Implement waste management procedures
 - [ ] Document compliance with local environmental regulations`,
-          sourceRefs: ['https://www.epa.gov/laws-regulations'],
-          confidence: 0.92,
-          pinned: false,
-          superseded: false,
-          createdAt: new Date().toISOString(),
-          refreshedAt: null,
-        },
-        {
-          id: uuidv4(),
-          documentId,
-          type: 'narrative',
-          title: 'Data Center Power Requirements',
-          content: `For a 5GW datacenter project, regulatory considerations should include:
+      sourceRefs: filterValidSources(['https://www.epa.gov/laws-regulations']),
+      confidence: 0.92,
+      pinned: false,
+      superseded: false,
+      createdAt: new Date().toISOString(),
+      refreshedAt: null,
+    },
+    {
+      id: uuidv4(),
+      documentId,
+      type: 'narrative',
+      title: 'Data Center Power Requirements',
+      content: `For a datacenter project, regulatory considerations should include:
 
 Grid connection agreements typically require coordination with local utility providers and may need approval from energy regulatory bodies. Consider backup power requirements and fuel storage regulations.
 
 Environmental regulations for power generation may apply if on-site generation is planned. Emissions permits and monitoring systems should be factored into the planning timeline.`,
-          sourceRefs: [],
-          confidence: 0.85,
-          pinned: false,
-          superseded: false,
-          createdAt: new Date().toISOString(),
-          refreshedAt: null,
-        },
-        {
-          id: uuidv4(),
-          documentId,
-          type: 'structured',
-          title: 'Data Privacy Requirements',
-          content: `Key data privacy considerations for datacenter operations:
+      sourceRefs: [],
+      confidence: 0.85,
+      pinned: false,
+      superseded: false,
+      createdAt: new Date().toISOString(),
+      refreshedAt: null,
+    },
+    {
+      id: uuidv4(),
+      documentId,
+      type: 'structured',
+      title: 'Data Privacy Requirements',
+      content: `Key data privacy considerations for datacenter operations:
 
 - [ ] Implement data classification system
 - [ ] Establish data retention policies
 - [ ] Configure access controls and audit logging
 - [ ] Plan for data subject rights requests
 - [ ] Document cross-border data transfer mechanisms`,
-          sourceRefs: ['https://gdpr.eu/'],
-          confidence: 0.88,
-          pinned: false,
-          superseded: false,
-          createdAt: new Date().toISOString(),
-          refreshedAt: null,
-        },
-      ];
+      sourceRefs: filterValidSources(['https://www.hhs.gov/hipaa', 'https://www.ftc.gov/privacy']),
+      confidence: 0.88,
+      pinned: false,
+      superseded: false,
+      createdAt: new Date().toISOString(),
+      refreshedAt: null,
+    },
+  ];
+}
 
-      return mockSuggestions;
+export const generateSuggestions = createAsyncThunk(
+  'suggestions/generate',
+  async (
+    { documentId, content, domainId }: { documentId: string; content: string; domainId: string },
+    { getState, rejectWithValue }
+  ) => {
+    try {
+      const state = getState() as {
+        suggestions: SuggestionsState;
+        domain: { sources: Array<{ url: string; title: string; category: string }>; useRealBackend: boolean };
+      };
+      const { signals, approverPov } = state.suggestions;
+      const { sources, useRealBackend } = state.domain;
+
+      // Get current valid source URLs for filtering
+      const validSourceUrls = new Set(sources.map((s) => s.url));
+
+      // Try to use real backend
+      if (useRealBackend) {
+        try {
+          // First, retrieve relevant sources using RAG
+          let retrievedSources: Array<{ url: string; title: string; content: string; category: string }> = [];
+
+          try {
+            const ragResponse = await api.retrieveSources({
+              query: content.slice(0, 2000), // Use first 2000 chars as query
+              domainId,
+              topK: 5,
+            });
+
+            retrievedSources = ragResponse.results.map((r) => ({
+              url: r.url,
+              title: r.title,
+              content: r.content,
+              category: r.category,
+            }));
+          } catch {
+            // RAG retrieval failed, continue with sources from domain
+            retrievedSources = sources.slice(0, 5).map((s) => ({
+              url: s.url,
+              title: s.title,
+              content: '', // No content available
+              category: s.category,
+            }));
+          }
+
+          // Generate suggestions using AI
+          const response = await api.generateSuggestions({
+            documentId,
+            documentContent: content,
+            domainId,
+            signals,
+            approverPov: approverPov || undefined,
+            retrievedSources,
+          });
+
+          // Convert response to Suggestion format
+          const suggestions: Suggestion[] = response.suggestions.map((s) => ({
+            id: s.id,
+            documentId,
+            type: s.type,
+            title: s.title,
+            content: s.content,
+            sourceRefs: s.sourceRefs.filter((ref) => {
+              // Only include sources that are still valid
+              for (const validUrl of validSourceUrls) {
+                try {
+                  const refHost = new URL(ref).hostname;
+                  const validHost = new URL(validUrl).hostname;
+                  if (refHost === validHost) return true;
+                } catch {
+                  // Invalid URL
+                }
+              }
+              return false;
+            }),
+            confidence: s.confidence,
+            pinned: false,
+            superseded: false,
+            createdAt: new Date().toISOString(),
+            refreshedAt: null,
+          }));
+
+          return suggestions;
+        } catch (error) {
+          console.warn('Backend suggestion generation failed, falling back to mock:', error);
+          // Fall through to mock generation
+        }
+      }
+
+      // Fallback: Generate mock suggestions
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      return generateMockSuggestions(documentId, validSourceUrls);
     } catch (error) {
       return rejectWithValue('Failed to generate suggestions');
     }
@@ -226,5 +325,3 @@ export const {
 } = suggestionsSlice.actions;
 
 export default suggestionsSlice.reducer;
-
-

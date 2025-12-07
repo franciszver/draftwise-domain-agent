@@ -8,6 +8,8 @@ interface UIState {
   highContrast: boolean;
   showRedactionTooltips: boolean;
   notifications: Notification[];
+  collapsedSuggestions: string[]; // IDs of collapsed suggestion cards
+  allSuggestionsCollapsed: boolean;
 }
 
 interface Notification {
@@ -26,6 +28,8 @@ const initialState: UIState = {
   highContrast: false,
   showRedactionTooltips: true,
   notifications: [],
+  collapsedSuggestions: [],
+  allSuggestionsCollapsed: false,
 };
 
 const uiSlice = createSlice({
@@ -76,6 +80,22 @@ const uiSlice = createSlice({
     clearNotifications: (state) => {
       state.notifications = [];
     },
+    toggleSuggestionCollapse: (state, action: PayloadAction<string>) => {
+      const id = action.payload;
+      if (state.collapsedSuggestions.includes(id)) {
+        state.collapsedSuggestions = state.collapsedSuggestions.filter((s) => s !== id);
+      } else {
+        state.collapsedSuggestions.push(id);
+      }
+    },
+    collapseAllSuggestions: (state, action: PayloadAction<string[]>) => {
+      state.collapsedSuggestions = action.payload;
+      state.allSuggestionsCollapsed = true;
+    },
+    expandAllSuggestions: (state) => {
+      state.collapsedSuggestions = [];
+      state.allSuggestionsCollapsed = false;
+    },
   },
 });
 
@@ -89,6 +109,9 @@ export const {
   addNotification,
   markNotificationRead,
   clearNotifications,
+  toggleSuggestionCollapse,
+  collapseAllSuggestions,
+  expandAllSuggestions,
 } = uiSlice.actions;
 
 export default uiSlice.reducer;

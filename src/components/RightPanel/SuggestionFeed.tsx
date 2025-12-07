@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store/hooks';
 import {
   generateSuggestions,
@@ -9,6 +9,11 @@ import {
   type Suggestion,
   type ApproverPOV,
 } from '../../store/slices/suggestionsSlice';
+import {
+  toggleSuggestionCollapse,
+  collapseAllSuggestions,
+  expandAllSuggestions,
+} from '../../store/slices/uiSlice';
 import { formatDistanceToNow } from 'date-fns';
 
 const povOptions: { value: ApproverPOV; label: string }[] = [
@@ -21,13 +26,69 @@ const povOptions: { value: ApproverPOV; label: string }[] = [
   { value: 'legal_contractual', label: 'Legal / Contractual' },
 ];
 
+// Tooltip content for signal controls
+const signalTooltips = {
+  formality: {
+    title: 'Formality',
+    description: 'Controls the language style and precision of suggestions',
+    options: {
+      casual: 'Conversational language for internal memos and team communications',
+      moderate: 'Standard business language for policies and general documents',
+      formal: 'Precise, structured language for official reports and regulatory filings',
+    },
+  },
+  risk: {
+    title: 'Risk Tolerance',
+    description: 'Controls how conservative or aggressive suggestions are',
+    options: {
+      conservative: 'Stricter interpretations, more safeguards, higher compliance margins',
+      moderate: 'Balanced approach between strict compliance and operational flexibility',
+      aggressive: 'Minimum compliance thresholds, optimized for efficiency',
+    },
+  },
+  stickiness: {
+    title: 'Stickiness',
+    description: 'Controls suggestion persistence for critical compliance issues',
+    options: {
+      low: 'Gentle reminders, easily dismissed, will not resurface',
+      medium: 'Important suggestions may reappear if issues remain unaddressed',
+      high: 'Critical gaps are persistent, resurface until properly addressed',
+    },
+  },
+};
+
 export function SuggestionFeed() {
   const dispatch = useAppDispatch();
   const { suggestions, signals, approverPov, isGenerating, lastGeneratedAt } = useAppSelector(
     (state) => state.suggestions
   );
   const { currentDocument } = useAppSelector((state) => state.document);
-  const { currentDomain } = useAppSelector((state) => state.domain);
+  const { currentDomain, sourcesVersion } = useAppSelector((state) => state.domain);
+  const { collapsedSuggestions } = useAppSelector((state) => state.ui);
+
+  // Track sources version for auto-refresh
+  const prevSourcesVersion = useRef(sourcesVersion);
+
+  // Auto-refresh suggestions when sources change
+  useEffect(() => {
+    if (
+      prevSourcesVersion.current !== sourcesVersion &&
+      sourcesVersion > 0 &&
+      currentDocument &&
+      currentDomain?.prepStatus === 'ready' &&
+      !isGenerating
+    ) {
+      // Sources have changed, trigger refresh
+      dispatch(
+        generateSuggestions({
+          documentId: currentDocument.id,
+          content: currentDocument.content,
+          domainId: currentDomain.id,
+        })
+      );
+    }
+    prevSourcesVersion.current = sourcesVersion;
+  }, [sourcesVersion, currentDocument, currentDomain, isGenerating, dispatch]);
 
   const handleGenerate = useCallback(() => {
     if (currentDocument && currentDomain) {
@@ -54,6 +115,22 @@ export function SuggestionFeed() {
     },
     [dispatch]
   );
+
+  const handleToggleCollapse = useCallback(
+    (suggestionId: string) => {
+      dispatch(toggleSuggestionCollapse(suggestionId));
+    },
+    [dispatch]
+  );
+
+  const handleCollapseAll = useCallback(() => {
+    const allIds = suggestions.filter((s) => !s.superseded || s.pinned).map((s) => s.id);
+    dispatch(collapseAllSuggestions(allIds));
+  }, [dispatch, suggestions]);
+
+  const handleExpandAll = useCallback(() => {
+    dispatch(expandAllSuggestions());
+  }, [dispatch]);
 
   // Sort suggestions: pinned first, then by date
   const sortedSuggestions = useMemo(() => {
@@ -104,21 +181,34 @@ export function SuggestionFeed() {
         <div className="grid grid-cols-3 gap-2">
           <SignalControl
             label="Formality"
+            tooltip={signalTooltips.formality}
             value={signals.formality}
             options={['casual', 'moderate', 'formal']}
             onChange={(v) => dispatch(setSignals({ formality: v as typeof signals.formality }))}
           />
           <SignalControl
             label="Risk"
+            tooltip={signalTooltips.risk}
             value={signals.riskAppetite}
             options={['conservative', 'moderate', 'aggressive']}
             onChange={(v) => dispatch(setSignals({ riskAppetite: v as typeof signals.riskAppetite }))}
           />
           <SignalControl
-            label="Strictness"
+            label="Stickiness"
+            tooltip={signalTooltips.stickiness}
             value={signals.complianceStrictness}
-            options={['lenient', 'standard', 'full']}
-            onChange={(v) => dispatch(setSignals({ complianceStrictness: v as typeof signals.complianceStrictness }))}
+            options={['low', 'medium', 'high']}
+            optionLabels={{ lenient: 'low', standard: 'medium', full: 'high' }}
+            tooltipAlign="right"
+            onChange={(v) => {
+              // Map the new labels back to the store values
+              const valueMap: Record<string, 'lenient' | 'standard' | 'full'> = {
+                low: 'lenient',
+                medium: 'standard',
+                high: 'full',
+              };
+              dispatch(setSignals({ complianceStrictness: valueMap[v] || 'standard' }));
+            }}
           />
         </div>
 
@@ -167,6 +257,33 @@ export function SuggestionFeed() {
         </div>
       )}
 
+      {/* Collapse/Expand controls */}
+      {sortedSuggestions.length > 0 && (
+        <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
+          <span className="text-xs text-slate-500">{sortedSuggestions.length} suggestion{sortedSuggestions.length !== 1 ? 's' : ''}</span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleCollapseAll}
+              className="text-xs text-slate-500 hover:text-slate-700"
+              title="Collapse All"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+              </svg>
+            </button>
+            <button
+              onClick={handleExpandAll}
+              className="text-xs text-slate-500 hover:text-slate-700"
+              title="Expand All"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Suggestions list */}
       <div className="flex-1 overflow-auto p-4 space-y-3">
         {sortedSuggestions.length === 0 && !isGenerating && (
@@ -182,8 +299,10 @@ export function SuggestionFeed() {
           <SuggestionCard
             key={suggestion.id}
             suggestion={suggestion}
+            isCollapsed={collapsedSuggestions.includes(suggestion.id)}
             onPin={() => handleTogglePin(suggestion.id)}
             onRefresh={() => handleRefresh(suggestion.id)}
+            onToggleCollapse={() => handleToggleCollapse(suggestion.id)}
           />
         ))}
       </div>
@@ -193,17 +312,60 @@ export function SuggestionFeed() {
 
 interface SignalControlProps {
   label: string;
+  tooltip: {
+    title: string;
+    description: string;
+    options: Record<string, string>;
+  };
   value: string;
   options: string[];
+  optionLabels?: Record<string, string>;
   onChange: (value: string) => void;
+  tooltipAlign?: 'left' | 'right';
 }
 
-function SignalControl({ label, value, options, onChange }: SignalControlProps) {
+function SignalControl({ label, tooltip, value, options, optionLabels, onChange, tooltipAlign = 'left' }: SignalControlProps) {
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  // Map the current store value to display value if optionLabels provided
+  // optionLabels maps store values (lenient/standard/full) to display values (low/medium/high)
+  const displayValue = optionLabels ? optionLabels[value] || value : value;
+
   return (
-    <div>
-      <label className="text-xs text-slate-500 block mb-1">{label}</label>
+    <div className="relative">
+      <div className="flex items-center gap-1 mb-1">
+        <label className="text-xs text-slate-500">{label}</label>
+        <button
+          type="button"
+          className="text-slate-400 hover:text-slate-600"
+          onMouseEnter={() => setShowTooltip(true)}
+          onMouseLeave={() => setShowTooltip(false)}
+          onClick={() => setShowTooltip(!showTooltip)}
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Tooltip */}
+      {showTooltip && (
+        <div className={`absolute z-50 top-full mt-1 w-64 p-3 bg-slate-900 text-white text-xs rounded-lg shadow-lg ${tooltipAlign === 'right' ? 'right-0' : 'left-0'}`}>
+          <p className="font-medium mb-1">{tooltip.title}</p>
+          <p className="text-slate-300 mb-2">{tooltip.description}</p>
+          <div className="space-y-1">
+            {Object.entries(tooltip.options).map(([key, desc]) => (
+              <div key={key} className="flex gap-2">
+                <span className="font-medium capitalize text-primary-300">{key}:</span>
+                <span className="text-slate-300">{desc}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <select
-        value={value}
+        value={displayValue}
         onChange={(e) => onChange(e.target.value)}
         className="w-full text-xs p-1.5 rounded border border-slate-200 bg-white"
       >
@@ -219,37 +381,86 @@ function SignalControl({ label, value, options, onChange }: SignalControlProps) 
 
 interface SuggestionCardProps {
   suggestion: Suggestion;
+  isCollapsed: boolean;
   onPin: () => void;
   onRefresh: () => void;
+  onToggleCollapse: () => void;
 }
 
-function SuggestionCard({ suggestion, onPin, onRefresh }: SuggestionCardProps) {
+function SuggestionCard({ suggestion, isCollapsed, onPin, onRefresh, onToggleCollapse }: SuggestionCardProps) {
   const timeAgo = formatDistanceToNow(new Date(suggestion.createdAt), { addSuffix: true });
+
+  // Severity badge based on confidence (inverse - lower confidence = higher severity)
+  const getSeverityBadge = () => {
+    if (suggestion.confidence < 0.6) return { label: 'High', class: 'bg-danger-100 text-danger-700' };
+    if (suggestion.confidence < 0.8) return { label: 'Medium', class: 'bg-warning-100 text-warning-700' };
+    return { label: 'Low', class: 'bg-success-100 text-success-700' };
+  };
+
+  const severity = getSeverityBadge();
+
+  if (isCollapsed) {
+    return (
+      <div
+        className={`card p-3 transition-all cursor-pointer hover:bg-slate-50 ${suggestion.pinned ? 'ring-2 ring-primary-500 bg-primary-50/30' : ''
+          }`}
+        onClick={onToggleCollapse}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <svg className="w-4 h-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            <h4 className="font-medium text-slate-900 truncate">{suggestion.title}</h4>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <span className={`text-xs px-2 py-0.5 rounded-full ${severity.class}`}>
+              {severity.label}
+            </span>
+            {suggestion.pinned && (
+              <svg className="w-4 h-4 text-primary-600" fill="currentColor" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+              </svg>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
-      className={`card p-4 transition-all ${
-        suggestion.pinned ? 'ring-2 ring-primary-500 bg-primary-50/30' : ''
-      }`}
+      className={`card p-4 transition-all ${suggestion.pinned ? 'ring-2 ring-primary-500 bg-primary-50/30' : ''
+        }`}
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
+          <button
+            onClick={onToggleCollapse}
+            className="p-0.5 rounded hover:bg-slate-100 text-slate-400"
+            title="Collapse"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
           <span
-            className={`badge ${
-              suggestion.type === 'structured' ? 'badge-primary' : 'badge-slate'
-            }`}
+            className={`badge ${suggestion.type === 'structured' ? 'badge-primary' : 'badge-slate'
+              }`}
           >
             {suggestion.type}
+          </span>
+          <span className={`text-xs px-2 py-0.5 rounded-full ${severity.class}`}>
+            {severity.label}
           </span>
           <span className="text-xs text-slate-400">{timeAgo}</span>
         </div>
         <div className="flex items-center gap-1">
           <button
             onClick={onPin}
-            className={`p-1 rounded hover:bg-slate-100 ${
-              suggestion.pinned ? 'text-primary-600' : 'text-slate-400'
-            }`}
+            className={`p-1 rounded hover:bg-slate-100 ${suggestion.pinned ? 'text-primary-600' : 'text-slate-400'
+              }`}
             title={suggestion.pinned ? 'Unpin' : 'Pin'}
           >
             <svg className="w-4 h-4" fill={suggestion.pinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
@@ -279,17 +490,25 @@ function SuggestionCard({ suggestion, onPin, onRefresh }: SuggestionCardProps) {
         <div className="mt-3 pt-3 border-t border-slate-100">
           <p className="text-xs text-slate-500 mb-1">Sources:</p>
           <div className="flex flex-wrap gap-1">
-            {suggestion.sourceRefs.map((ref, i) => (
-              <a
-                key={i}
-                href={ref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-primary-600 hover:underline truncate max-w-[200px]"
-              >
-                {new URL(ref).hostname}
-              </a>
-            ))}
+            {suggestion.sourceRefs.map((ref, i) => {
+              let hostname = ref;
+              try {
+                hostname = new URL(ref).hostname;
+              } catch {
+                // Invalid URL, use the ref as-is
+              }
+              return (
+                <a
+                  key={i}
+                  href={ref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary-600 hover:underline truncate max-w-[200px]"
+                >
+                  {hostname}
+                </a>
+              );
+            })}
           </div>
         </div>
       )}
@@ -298,13 +517,12 @@ function SuggestionCard({ suggestion, onPin, onRefresh }: SuggestionCardProps) {
       <div className="mt-2 flex items-center gap-2">
         <div className="flex-1 h-1 bg-slate-100 rounded-full overflow-hidden">
           <div
-            className={`h-full ${
-              suggestion.confidence > 0.8
-                ? 'bg-success-500'
-                : suggestion.confidence > 0.6
+            className={`h-full ${suggestion.confidence > 0.8
+              ? 'bg-success-500'
+              : suggestion.confidence > 0.6
                 ? 'bg-warning-500'
                 : 'bg-slate-400'
-            }`}
+              }`}
             style={{ width: `${suggestion.confidence * 100}%` }}
           />
         </div>
@@ -315,5 +533,3 @@ function SuggestionCard({ suggestion, onPin, onRefresh }: SuggestionCardProps) {
     </div>
   );
 }
-
-
