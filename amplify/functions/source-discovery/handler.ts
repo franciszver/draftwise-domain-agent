@@ -85,40 +85,6 @@ async function extractContent(
   return content.slice(0, 10000); // Limit content size
 }
 
-// Follow links for shallow crawl (1 level deep)
-async function extractLinks(content: string, baseUrl: string): Promise<string[]> {
-  const linkPattern = /\[([^\]]+)\]\(([^)]+)\)/g;
-  const links: string[] = [];
-  let match;
-
-  while ((match = linkPattern.exec(content)) !== null) {
-    const href = match[2];
-    if (href.startsWith('http')) {
-      links.push(href);
-    } else if (href.startsWith('/')) {
-      try {
-        const base = new URL(baseUrl);
-        links.push(`${base.origin}${href}`);
-      } catch {
-        // Invalid URL, skip
-      }
-    }
-  }
-
-  // Filter to same domain and relevant paths
-  const baseOrigin = new URL(baseUrl).origin;
-  return links
-    .filter((link) => {
-      try {
-        const url = new URL(link);
-        return url.origin === baseOrigin;
-      } catch {
-        return false;
-      }
-    })
-    .slice(0, 5); // Limit to 5 links per page
-}
-
 // Generate embedding for content using Jina AI (primary) or OpenAI (fallback)
 async function generateEmbedding(
   text: string,
@@ -504,28 +470,6 @@ const CURATED_SOURCES: Record<string, Record<string, Array<{ url: string; title:
     ],
   },
 };
-
-// Get jurisdiction key from country/state
-function getJurisdictionKey(jurisdiction: string): string {
-  const euCountries = ['Germany', 'France', 'Italy', 'Spain', 'Netherlands', 'Belgium', 'Austria', 'Poland', 'Sweden', 'Denmark', 'Finland', 'Ireland', 'Portugal', 'Greece'];
-
-  // Check for US state-specific jurisdiction (e.g., "United States Texas" or "USA Texas")
-  const usStates = ['Texas', 'California', 'New York', 'Florida', 'Illinois'];
-  for (const state of usStates) {
-    if (jurisdiction.includes(state)) {
-      const stateKey = `USA-${state}`;
-      console.log(`[Jurisdiction] Detected state-level jurisdiction: ${stateKey}`);
-      // Return state-specific key if we have curated sources for it
-      if (CURATED_SOURCES[stateKey]) {
-        return stateKey;
-      }
-    }
-  }
-
-  if (jurisdiction.includes('United States') || jurisdiction.includes('USA')) return 'USA';
-  if (euCountries.some(c => jurisdiction.includes(c))) return 'EU';
-  return 'USA'; // Default to USA sources
-}
 
 // Fallback discovery using curated sources only - merges country + state sources
 async function discoverFromCuratedSources(
