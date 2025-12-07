@@ -4,8 +4,11 @@ import {
   generateSuggestions,
   refreshSuggestion,
   togglePin,
+  archiveSuggestion,
+  unarchiveSuggestion,
   setSignals,
   setApproverPov,
+  setSuggestionCount,
   type Suggestion,
   type ApproverPOV,
 } from '../../store/slices/suggestionsSlice';
@@ -15,6 +18,8 @@ import {
   expandAllSuggestions,
 } from '../../store/slices/uiSlice';
 import { formatDistanceToNow } from 'date-fns';
+
+const suggestionCountOptions = [3, 5, 8, 10, 15];
 
 const povOptions: { value: ApproverPOV; label: string }[] = [
   { value: null, label: 'All Perspectives' },
@@ -59,12 +64,14 @@ const signalTooltips = {
 
 export function SuggestionFeed() {
   const dispatch = useAppDispatch();
-  const { suggestions, signals, approverPov, isGenerating, lastGeneratedAt } = useAppSelector(
+  const { suggestions, archivedSuggestions, signals, approverPov, suggestionCount, isGenerating, lastGeneratedAt } = useAppSelector(
     (state) => state.suggestions
   );
   const { currentDocument } = useAppSelector((state) => state.document);
   const { currentDomain, sourcesVersion } = useAppSelector((state) => state.domain);
   const { collapsedSuggestions } = useAppSelector((state) => state.ui);
+
+  const [showArchived, setShowArchived] = useState(false);
 
   // Track sources version for auto-refresh
   const prevSourcesVersion = useRef(sourcesVersion);
@@ -97,10 +104,38 @@ export function SuggestionFeed() {
           documentId: currentDocument.id,
           content: currentDocument.content,
           domainId: currentDomain.id,
+          appendMode: false,
         })
       );
     }
   }, [dispatch, currentDocument, currentDomain]);
+
+  const handleGenerateMore = useCallback(() => {
+    if (currentDocument && currentDomain) {
+      dispatch(
+        generateSuggestions({
+          documentId: currentDocument.id,
+          content: currentDocument.content,
+          domainId: currentDomain.id,
+          appendMode: true,
+        })
+      );
+    }
+  }, [dispatch, currentDocument, currentDomain]);
+
+  const handleArchive = useCallback(
+    (suggestionId: string) => {
+      dispatch(archiveSuggestion(suggestionId));
+    },
+    [dispatch]
+  );
+
+  const handleUnarchive = useCallback(
+    (suggestionId: string) => {
+      dispatch(unarchiveSuggestion(suggestionId));
+    },
+    [dispatch]
+  );
 
   const handleRefresh = useCallback(
     (suggestionId: string) => {
@@ -132,10 +167,10 @@ export function SuggestionFeed() {
     dispatch(expandAllSuggestions());
   }, [dispatch]);
 
-  // Sort suggestions: pinned first, then by date
+  // Sort suggestions: pinned first, then by date (exclude archived)
   const sortedSuggestions = useMemo(() => {
     return [...suggestions]
-      .filter((s) => !s.superseded || s.pinned)
+      .filter((s) => (!s.superseded || s.pinned) && !s.archived)
       .sort((a, b) => {
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
@@ -224,10 +259,23 @@ export function SuggestionFeed() {
               </option>
             ))}
           </select>
+          <select
+            value={suggestionCount}
+            onChange={(e) => dispatch(setSuggestionCount(parseInt(e.target.value)))}
+            className="input text-sm w-16"
+            title="Number of suggestions"
+          >
+            {suggestionCountOptions.map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
           <button
             onClick={handleGenerate}
             disabled={isGenerating}
             className="btn-primary btn-sm"
+            title="Generate Suggestions"
           >
             {isGenerating ? (
               <span className="spinner w-4 h-4" />
@@ -257,36 +305,63 @@ export function SuggestionFeed() {
         </div>
       )}
 
-      {/* Collapse/Expand controls */}
-      {sortedSuggestions.length > 0 && (
+      {/* Controls bar */}
+      {(sortedSuggestions.length > 0 || archivedSuggestions.length > 0) && (
         <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between">
-          <span className="text-xs text-slate-500">{sortedSuggestions.length} suggestion{sortedSuggestions.length !== 1 ? 's' : ''}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500">
+              {showArchived
+                ? `${archivedSuggestions.length} archived`
+                : `${sortedSuggestions.length} suggestion${sortedSuggestions.length !== 1 ? 's' : ''}`}
+            </span>
+            {archivedSuggestions.length > 0 && (
+              <button
+                onClick={() => setShowArchived(!showArchived)}
+                className={`text-xs ${showArchived ? 'text-primary-600 font-medium' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                {showArchived ? 'Show Active' : `View Archived (${archivedSuggestions.length})`}
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleCollapseAll}
-              className="text-xs text-slate-500 hover:text-slate-700"
-              title="Collapse All"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
-              </svg>
-            </button>
-            <button
-              onClick={handleExpandAll}
-              className="text-xs text-slate-500 hover:text-slate-700"
-              title="Expand All"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
-              </svg>
-            </button>
+            {!showArchived && sortedSuggestions.length > 0 && (
+              <>
+                <button
+                  onClick={handleGenerateMore}
+                  disabled={isGenerating}
+                  className="text-xs text-primary-600 hover:text-primary-700 font-medium"
+                  title="Generate More"
+                >
+                  + More
+                </button>
+                <div className="w-px h-4 bg-slate-200" />
+                <button
+                  onClick={handleCollapseAll}
+                  className="text-xs text-slate-500 hover:text-slate-700"
+                  title="Collapse All"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8h16M4 16h16" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleExpandAll}
+                  className="text-xs text-slate-500 hover:text-slate-700"
+                  title="Expand All"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16m-7 6h7" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
 
       {/* Suggestions list */}
       <div className="flex-1 overflow-auto p-4 space-y-3">
-        {sortedSuggestions.length === 0 && !isGenerating && (
+        {!showArchived && sortedSuggestions.length === 0 && !isGenerating && (
           <div className="text-center py-8">
             <p className="text-slate-500 text-sm mb-4">No suggestions yet</p>
             <button onClick={handleGenerate} className="btn-primary">
@@ -295,16 +370,37 @@ export function SuggestionFeed() {
           </div>
         )}
 
-        {sortedSuggestions.map((suggestion) => (
-          <SuggestionCard
-            key={suggestion.id}
-            suggestion={suggestion}
-            isCollapsed={collapsedSuggestions.includes(suggestion.id)}
-            onPin={() => handleTogglePin(suggestion.id)}
-            onRefresh={() => handleRefresh(suggestion.id)}
-            onToggleCollapse={() => handleToggleCollapse(suggestion.id)}
-          />
-        ))}
+        {showArchived && archivedSuggestions.length === 0 && (
+          <div className="text-center py-8">
+            <p className="text-slate-500 text-sm">No archived suggestions</p>
+          </div>
+        )}
+
+        {showArchived
+          ? archivedSuggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              isCollapsed={false}
+              isArchived={true}
+              onPin={() => { }}
+              onRefresh={() => { }}
+              onToggleCollapse={() => { }}
+              onArchive={() => handleUnarchive(suggestion.id)}
+            />
+          ))
+          : sortedSuggestions.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.id}
+              suggestion={suggestion}
+              isCollapsed={collapsedSuggestions.includes(suggestion.id)}
+              isArchived={false}
+              onPin={() => handleTogglePin(suggestion.id)}
+              onRefresh={() => handleRefresh(suggestion.id)}
+              onToggleCollapse={() => handleToggleCollapse(suggestion.id)}
+              onArchive={() => handleArchive(suggestion.id)}
+            />
+          ))}
       </div>
     </div>
   );
@@ -382,12 +478,14 @@ function SignalControl({ label, tooltip, value, options, optionLabels, onChange,
 interface SuggestionCardProps {
   suggestion: Suggestion;
   isCollapsed: boolean;
+  isArchived: boolean;
   onPin: () => void;
   onRefresh: () => void;
   onToggleCollapse: () => void;
+  onArchive: () => void;
 }
 
-function SuggestionCard({ suggestion, isCollapsed, onPin, onRefresh, onToggleCollapse }: SuggestionCardProps) {
+function SuggestionCard({ suggestion, isCollapsed, isArchived, onPin, onRefresh, onToggleCollapse, onArchive }: SuggestionCardProps) {
   const timeAgo = formatDistanceToNow(new Date(suggestion.createdAt), { addSuffix: true });
 
   // Severity badge based on confidence (inverse - lower confidence = higher severity)
@@ -457,23 +555,40 @@ function SuggestionCard({ suggestion, isCollapsed, onPin, onRefresh, onToggleCol
           <span className="text-xs text-slate-400">{timeAgo}</span>
         </div>
         <div className="flex items-center gap-1">
+          {!isArchived && (
+            <>
+              <button
+                onClick={onPin}
+                className={`p-1 rounded hover:bg-slate-100 ${suggestion.pinned ? 'text-primary-600' : 'text-slate-400'
+                  }`}
+                title={suggestion.pinned ? 'Unpin' : 'Pin'}
+              >
+                <svg className="w-4 h-4" fill={suggestion.pinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                </svg>
+              </button>
+              <button
+                onClick={onRefresh}
+                className="p-1 rounded hover:bg-slate-100 text-slate-400"
+                title="Refresh"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </>
+          )}
           <button
-            onClick={onPin}
-            className={`p-1 rounded hover:bg-slate-100 ${suggestion.pinned ? 'text-primary-600' : 'text-slate-400'
-              }`}
-            title={suggestion.pinned ? 'Unpin' : 'Pin'}
-          >
-            <svg className="w-4 h-4" fill={suggestion.pinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-            </svg>
-          </button>
-          <button
-            onClick={onRefresh}
+            onClick={onArchive}
             className="p-1 rounded hover:bg-slate-100 text-slate-400"
-            title="Refresh"
+            title={isArchived ? 'Restore' : 'Archive'}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              {isArchived ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+              )}
             </svg>
           </button>
         </div>
@@ -488,12 +603,20 @@ function SuggestionCard({ suggestion, isCollapsed, onPin, onRefresh, onToggleCol
       {/* Sources */}
       {suggestion.sourceRefs.length > 0 && (
         <div className="mt-3 pt-3 border-t border-slate-100">
-          <p className="text-xs text-slate-500 mb-1">Sources:</p>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex items-center gap-1 mb-2">
+            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            <p className="text-xs font-medium text-slate-600">Reference Sources ({suggestion.sourceRefs.length})</p>
+          </div>
+          <div className="space-y-1.5">
             {suggestion.sourceRefs.map((ref, i) => {
               let hostname = ref;
+              let pathname = '';
               try {
-                hostname = new URL(ref).hostname;
+                const url = new URL(ref);
+                hostname = url.hostname.replace('www.', '');
+                pathname = url.pathname.length > 1 ? url.pathname.slice(0, 30) + (url.pathname.length > 30 ? '...' : '') : '';
               } catch {
                 // Invalid URL, use the ref as-is
               }
@@ -503,9 +626,24 @@ function SuggestionCard({ suggestion, isCollapsed, onPin, onRefresh, onToggleCol
                   href={ref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-primary-600 hover:underline truncate max-w-[200px]"
+                  className="flex items-center gap-2 p-2 rounded-md bg-slate-50 hover:bg-primary-50 border border-slate-100 hover:border-primary-200 transition-colors group"
                 >
-                  {hostname}
+                  <svg className="w-4 h-4 text-slate-400 group-hover:text-primary-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-slate-700 group-hover:text-primary-700 truncate">
+                      {hostname}
+                    </p>
+                    {pathname && (
+                      <p className="text-xs text-slate-400 group-hover:text-primary-400 truncate">
+                        {pathname}
+                      </p>
+                    )}
+                  </div>
+                  <svg className="w-3.5 h-3.5 text-slate-300 group-hover:text-primary-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
                 </a>
               );
             })}

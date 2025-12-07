@@ -14,6 +14,7 @@ interface DiscoveredSource {
   snippet: string;
   content?: string;
   embedding?: number[];
+  jurisdictionLevel?: 'federal' | 'state' | 'local'; // Tag for source level
 }
 
 interface DiscoveryResponse {
@@ -118,33 +119,65 @@ async function extractLinks(content: string, baseUrl: string): Promise<string[]>
     .slice(0, 5); // Limit to 5 links per page
 }
 
-// Generate embedding for content
+// Generate embedding for content using Jina AI (primary) or OpenAI (fallback)
 async function generateEmbedding(
   text: string,
-  apiKey: string
+  jinaKey: string,
+  openaiKey?: string
 ): Promise<number[]> {
-  // Chunk text if too long (max ~8000 tokens for embedding)
+  // Chunk text if too long
   const truncatedText = text.slice(0, 20000);
 
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'text-embedding-3-small',
-      input: truncatedText,
-    }),
-  });
+  // Try Jina first (free tier available)
+  if (jinaKey) {
+    try {
+      const response = await fetch('https://api.jina.ai/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${jinaKey}`,
+        },
+        body: JSON.stringify({
+          model: 'jina-embeddings-v3',
+          task: 'retrieval.passage',
+          input: [truncatedText],
+        }),
+      });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`OpenAI Embedding error: ${error}`);
+      if (response.ok) {
+        const data = await response.json();
+        return data.data[0].embedding;
+      }
+      console.warn('Jina embedding failed, trying OpenAI fallback');
+    } catch (err) {
+      console.warn('Jina embedding error:', err);
+    }
   }
 
-  const data = await response.json();
-  return data.data[0].embedding;
+  // Fallback to OpenAI
+  if (openaiKey) {
+    const response = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input: truncatedText,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI Embedding error: ${error}`);
+    }
+
+    const data = await response.json();
+    return data.data[0].embedding;
+  }
+
+  throw new Error('No embedding API available - configure JINA_API_KEY or OPENAI_API_KEY');
 }
 
 // Semantic chunking with max size fallback
@@ -199,103 +232,210 @@ function chunkContent(
   return finalChunks;
 }
 
-// Main discovery function
+// Normalize URL for deduplication
+function normalizeUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // Remove trailing slashes, fragments, and normalize
+    return `${parsed.origin}${parsed.pathname.replace(/\/$/, '')}`.toLowerCase();
+  } catch {
+    return url.toLowerCase().replace(/\/$/, '');
+  }
+}
+
+// Extract state from jurisdiction string (e.g., "United States Texas" -> "Texas")
+function extractState(jurisdiction: string): string | null {
+  const usStates = [
+    'Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut',
+    'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa',
+    'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan',
+    'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire',
+    'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio',
+    'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota',
+    'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia',
+    'Wisconsin', 'Wyoming'
+  ];
+
+  for (const state of usStates) {
+    if (jurisdiction.includes(state)) {
+      return state;
+    }
+  }
+  return null;
+}
+
+// Single search helper that tags results with jurisdiction level
+// Each search maintains its own URL tracking to avoid cross-contamination
+async function searchAndProcess(
+  query: string,
+  jurisdictionLevel: 'federal' | 'state',
+  braveKey: string,
+  jinaKey: string,
+  openaiKey: string | undefined,
+  maxSources: number
+): Promise<{ sources: DiscoveredSource[]; errors: string[] }> {
+  const sources: DiscoveredSource[] = [];
+  const errors: string[] = [];
+  const processedUrls = new Set<string>(); // Each search has its own URL tracking
+
+  console.log(`[Search ${jurisdictionLevel}] Query: ${query}`);
+
+  try {
+    const searchResults = await searchBrave(query, braveKey, 10);
+    console.log(`[Search ${jurisdictionLevel}] Found ${searchResults.length} results`);
+
+    for (const result of searchResults) {
+      if (sources.length >= maxSources) break;
+
+      const normalizedUrl = normalizeUrl(result.url);
+      if (processedUrls.has(normalizedUrl)) {
+        console.log(`[Search ${jurisdictionLevel}] Skipping duplicate: ${result.url}`);
+        continue;
+      }
+      processedUrls.add(normalizedUrl);
+
+      let content = '';
+      try {
+        content = await extractContent(result.url, jinaKey);
+      } catch {
+        console.warn(`[Search ${jurisdictionLevel}] Failed to extract: ${result.url}`);
+      }
+
+      if (!content) {
+        errors.push(`Failed to extract content from ${result.url}`);
+        continue;
+      }
+
+      const chunks = chunkContent(content);
+      for (let i = 0; i < Math.min(chunks.length, 3) && sources.length < maxSources; i++) {
+        try {
+          const embedding = await generateEmbedding(chunks[i], jinaKey, openaiKey);
+          sources.push({
+            url: result.url,
+            title: result.title,
+            snippet: result.snippet,
+            content: chunks[i],
+            embedding,
+            jurisdictionLevel,
+          });
+          console.log(`[Search ${jurisdictionLevel}] Indexed: "${result.title}"`);
+        } catch (err) {
+          errors.push(`Failed to embed chunk from ${result.url}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[Search ${jurisdictionLevel}] Search failed:`, err);
+    errors.push(`Search failed for ${jurisdictionLevel} query`);
+  }
+
+  return { sources, errors };
+}
+
+// Main discovery function - runs parallel country + state searches when applicable
 async function discoverSources(
   request: DiscoveryRequest,
   braveKey: string,
   jinaKey: string,
-  openaiKey: string
+  openaiKey?: string
 ): Promise<DiscoveryResponse> {
   const maxSources = request.maxSources || 25;
-  const sources: DiscoveredSource[] = [];
-  const errors: string[] = [];
-  const processedUrls = new Set<string>();
+  const allErrors: string[] = [];
 
-  // Step 1: Search Brave for sources
-  console.log(`Searching Brave for: ${request.query}`);
-  const searchResults = await searchBrave(request.query, braveKey, 10);
-  console.log(`Found ${searchResults.length} search results`);
+  console.log(`[Source Discovery] Starting discovery for: ${request.jurisdiction}`);
+  console.log(`[Source Discovery] Category: ${request.category}`);
+  console.log(`[Source Discovery] Original query: ${request.query}`);
 
-  // Step 2: Process each result (with retry logic)
-  for (const result of searchResults) {
-    if (sources.length >= maxSources) break;
-    if (processedUrls.has(result.url)) continue;
-    processedUrls.add(result.url);
+  // Detect if we have a state-level jurisdiction
+  const state = extractState(request.jurisdiction);
+  const hasState = !!state;
 
-    let content = '';
-    let retries = 0;
-    const maxRetries = 1;
+  let combinedSources: DiscoveredSource[] = [];
 
-    while (retries <= maxRetries && !content) {
-      try {
-        console.log(`Extracting content from: ${result.url} (attempt ${retries + 1})`);
-        content = await extractContent(result.url, jinaKey);
-      } catch (err) {
-        console.warn(`Retry ${retries + 1} failed for ${result.url}`);
-        retries++;
+  if (hasState) {
+    console.log(`[Source Discovery] Detected state: ${state} - running parallel federal + state searches`);
+
+    // Build separate queries for federal and state
+    // Use more distinct queries to get different results
+    const federalQuery = `${request.query.replace(state, '').trim()} federal law regulations`;
+    const stateQuery = `${state} ${request.category} state law regulations requirements`;
+
+    console.log(`[Source Discovery] Federal query: ${federalQuery}`);
+    console.log(`[Source Discovery] State query: ${stateQuery}`);
+
+    // Run both searches in parallel - each has its own URL tracking
+    const halfMax = Math.ceil(maxSources / 2);
+    const [federalResult, stateResult] = await Promise.all([
+      searchAndProcess(federalQuery, 'federal', braveKey, jinaKey, openaiKey, halfMax),
+      searchAndProcess(stateQuery, 'state', braveKey, jinaKey, openaiKey, halfMax),
+    ]);
+
+    console.log(`[Source Discovery] Federal sources: ${federalResult.sources.length}`);
+    console.log(`[Source Discovery] State sources: ${stateResult.sources.length}`);
+
+    allErrors.push(...federalResult.errors);
+    allErrors.push(...stateResult.errors);
+
+    // Combine and deduplicate - prefer state sources for overlapping URLs
+    // (state-specific info is more relevant when user selected a state)
+    const seenUrls = new Set<string>();
+
+    // Add state sources first (they take priority for duplicates)
+    for (const source of stateResult.sources) {
+      const normalizedUrl = normalizeUrl(source.url);
+      if (!seenUrls.has(normalizedUrl)) {
+        seenUrls.add(normalizedUrl);
+        combinedSources.push(source);
+        console.log(`[Source Discovery] Added state source: "${source.title}"`);
       }
     }
 
-    if (!content) {
-      errors.push(`Failed to extract content from ${result.url}`);
-      continue;
-    }
-
-    // Step 3: Shallow crawl - extract and process linked pages
-    const links = await extractLinks(content, result.url);
-    console.log(`Found ${links.length} links to crawl from ${result.url}`);
-
-    // Process main page
-    const chunks = chunkContent(content);
-    for (let i = 0; i < chunks.length && sources.length < maxSources; i++) {
-      try {
-        const embedding = await generateEmbedding(chunks[i], openaiKey);
-        sources.push({
-          url: result.url,
-          title: result.title,
-          snippet: result.snippet,
-          content: chunks[i],
-          embedding,
-        });
-      } catch (err) {
-        errors.push(`Failed to embed chunk from ${result.url}`);
+    // Then add federal sources (skip if URL already from state)
+    for (const source of federalResult.sources) {
+      const normalizedUrl = normalizeUrl(source.url);
+      if (!seenUrls.has(normalizedUrl)) {
+        seenUrls.add(normalizedUrl);
+        combinedSources.push(source);
+        console.log(`[Source Discovery] Added federal source: "${source.title}"`);
+      } else {
+        console.log(`[Source Discovery] Skipping federal duplicate: "${source.title}"`);
       }
     }
+  } else {
+    // No state - just do country-level search
+    console.log(`[Source Discovery] Country-level search only`);
 
-    // Process linked pages (shallow crawl)
-    for (const link of links) {
-      if (sources.length >= maxSources) break;
-      if (processedUrls.has(link)) continue;
-      processedUrls.add(link);
+    const result = await searchAndProcess(
+      request.query,
+      'federal',
+      braveKey,
+      jinaKey,
+      openaiKey,
+      maxSources
+    );
 
-      try {
-        const linkedContent = await extractContent(link, jinaKey);
-        if (linkedContent) {
-          const linkedChunks = chunkContent(linkedContent);
-          for (let i = 0; i < Math.min(linkedChunks.length, 2) && sources.length < maxSources; i++) {
-            const embedding = await generateEmbedding(linkedChunks[i], openaiKey);
-            sources.push({
-              url: link,
-              title: `${result.title} (linked)`,
-              snippet: linkedChunks[i].slice(0, 200),
-              content: linkedChunks[i],
-              embedding,
-            });
-          }
-        }
-      } catch (err) {
-        // Skip failed linked pages
-        console.warn(`Failed to process linked page: ${link}`);
-      }
-    }
+    combinedSources = result.sources;
+    allErrors.push(...result.errors);
+  }
+
+  // Cap at maxSources
+  const finalSources = combinedSources.slice(0, maxSources);
+
+  // Log final breakdown
+  const federalCount = finalSources.filter(s => s.jurisdictionLevel === 'federal').length;
+  const stateCount = finalSources.filter(s => s.jurisdictionLevel === 'state').length;
+  console.log(`[Source Discovery] Complete! Total: ${finalSources.length} (${federalCount} federal, ${stateCount} state)`);
+
+  if (allErrors.length > 0) {
+    console.log(`[Source Discovery] Errors: ${allErrors.length}`);
   }
 
   return {
-    sources,
+    sources: finalSources,
     query: request.query,
-    totalFound: searchResults.length,
-    indexed: sources.length,
-    errors,
+    totalFound: combinedSources.length,
+    indexed: finalSources.length,
+    errors: allErrors,
   };
 }
 
@@ -320,6 +460,31 @@ const CURATED_SOURCES: Record<string, Record<string, Array<{ url: string; title:
       { url: 'https://www.law.cornell.edu/uscode', title: 'US Code - Cornell Law' },
     ],
   },
+  // Texas-specific sources
+  'USA-Texas': {
+    environmental: [
+      { url: 'https://www.tceq.texas.gov/rules', title: 'Texas Commission on Environmental Quality Rules' },
+      { url: 'https://www.tceq.texas.gov/permitting/air', title: 'TCEQ Air Quality Permits' },
+      { url: 'https://www.epa.gov/laws-regulations', title: 'EPA Laws & Regulations' },
+    ],
+    data_privacy: [
+      { url: 'https://capitol.texas.gov/BillLookup/History.aspx?LegSess=88R&Bill=HB4', title: 'Texas Data Privacy Act' },
+      { url: 'https://www.ftc.gov/business-guidance/privacy-security', title: 'FTC Privacy & Security' },
+      { url: 'https://www.hhs.gov/hipaa/for-professionals/index.html', title: 'HHS HIPAA Guide' },
+    ],
+    financial: [
+      { url: 'https://www.sec.gov/rules', title: 'SEC Rules' },
+      { url: 'https://www.finance.texas.gov/', title: 'Texas Dept of Banking' },
+    ],
+    safety_workforce: [
+      { url: 'https://www.twc.texas.gov/', title: 'Texas Workforce Commission' },
+      { url: 'https://www.osha.gov/laws-regs', title: 'OSHA Laws & Regulations' },
+    ],
+    legal_contractual: [
+      { url: 'https://statutes.capitol.texas.gov/', title: 'Texas Statutes' },
+      { url: 'https://www.law.cornell.edu/uscode', title: 'US Code - Cornell Law' },
+    ],
+  },
   EU: {
     environmental: [
       { url: 'https://environment.ec.europa.eu/law-and-governance_en', title: 'EU Environmental Law' },
@@ -340,32 +505,82 @@ const CURATED_SOURCES: Record<string, Record<string, Array<{ url: string; title:
   },
 };
 
-// Get jurisdiction key from country
+// Get jurisdiction key from country/state
 function getJurisdictionKey(jurisdiction: string): string {
   const euCountries = ['Germany', 'France', 'Italy', 'Spain', 'Netherlands', 'Belgium', 'Austria', 'Poland', 'Sweden', 'Denmark', 'Finland', 'Ireland', 'Portugal', 'Greece'];
-  if (jurisdiction === 'United States' || jurisdiction === 'USA') return 'USA';
-  if (euCountries.includes(jurisdiction)) return 'EU';
+
+  // Check for US state-specific jurisdiction (e.g., "United States Texas" or "USA Texas")
+  const usStates = ['Texas', 'California', 'New York', 'Florida', 'Illinois'];
+  for (const state of usStates) {
+    if (jurisdiction.includes(state)) {
+      const stateKey = `USA-${state}`;
+      console.log(`[Jurisdiction] Detected state-level jurisdiction: ${stateKey}`);
+      // Return state-specific key if we have curated sources for it
+      if (CURATED_SOURCES[stateKey]) {
+        return stateKey;
+      }
+    }
+  }
+
+  if (jurisdiction.includes('United States') || jurisdiction.includes('USA')) return 'USA';
+  if (euCountries.some(c => jurisdiction.includes(c))) return 'EU';
   return 'USA'; // Default to USA sources
 }
 
-// Fallback discovery using curated sources only
+// Fallback discovery using curated sources only - merges country + state sources
 async function discoverFromCuratedSources(
   request: DiscoveryRequest,
   jinaKey: string,
-  openaiKey: string
+  openaiKey?: string
 ): Promise<DiscoveryResponse> {
   const maxSources = request.maxSources || 25;
   const sources: DiscoveredSource[] = [];
   const errors: string[] = [];
+  const processedUrls = new Set<string>();
 
-  const jurisdictionKey = getJurisdictionKey(request.jurisdiction);
-  const curatedForJurisdiction = CURATED_SOURCES[jurisdictionKey] || CURATED_SOURCES['USA'];
-  const categoryUrls = curatedForJurisdiction[request.category] || [];
+  console.log(`[Curated Discovery] Starting for jurisdiction: ${request.jurisdiction}`);
+  console.log(`[Curated Discovery] Category: ${request.category}`);
 
-  console.log(`Using curated sources for ${jurisdictionKey}/${request.category}: ${categoryUrls.length} sources`);
+  // Detect state and get both country + state sources
+  const state = extractState(request.jurisdiction);
+  const stateKey = state ? `USA-${state}` : null;
 
-  for (const source of categoryUrls) {
+  // Collect sources from both federal and state levels
+  interface CuratedSource { url: string; title: string; level: 'federal' | 'state' }
+  const allCuratedSources: CuratedSource[] = [];
+
+  // Always add federal/country sources
+  const federalSources = CURATED_SOURCES['USA']?.[request.category] || [];
+  federalSources.forEach(s => {
+    allCuratedSources.push({ ...s, level: 'federal' });
+  });
+  console.log(`[Curated Discovery] Federal sources: ${federalSources.length}`);
+
+  // Add state-specific sources if available
+  if (stateKey && CURATED_SOURCES[stateKey]) {
+    const stateSources = CURATED_SOURCES[stateKey][request.category] || [];
+    stateSources.forEach(s => {
+      // Avoid duplicates (state sources might include federal ones)
+      const normalizedUrl = normalizeUrl(s.url);
+      if (!allCuratedSources.some(existing => normalizeUrl(existing.url) === normalizedUrl)) {
+        allCuratedSources.push({ ...s, level: 'state' });
+      }
+    });
+    console.log(`[Curated Discovery] State (${state}) sources: ${stateSources.length}`);
+  }
+
+  console.log(`[Curated Discovery] Total curated sources to process: ${allCuratedSources.length}`);
+
+  for (const source of allCuratedSources) {
     if (sources.length >= maxSources) break;
+
+    // Skip duplicates
+    const normalizedUrl = normalizeUrl(source.url);
+    if (processedUrls.has(normalizedUrl)) {
+      console.log(`[Curated Discovery] Skipping duplicate: ${source.url}`);
+      continue;
+    }
+    processedUrls.add(normalizedUrl);
 
     try {
       let content = '';
@@ -374,8 +589,9 @@ async function discoverFromCuratedSources(
       if (jinaKey) {
         try {
           content = await extractContent(source.url, jinaKey);
+          console.log(`[Curated Discovery] Extracted content from: ${source.title}`);
         } catch {
-          console.warn(`Jina extraction failed for ${source.url}`);
+          console.warn(`[Curated Discovery] Jina extraction failed for ${source.url}`);
         }
       }
 
@@ -388,14 +604,16 @@ async function discoverFromCuratedSources(
       const chunks = chunkContent(content);
       for (let i = 0; i < Math.min(chunks.length, 3) && sources.length < maxSources; i++) {
         try {
-          const embedding = await generateEmbedding(chunks[i], openaiKey);
+          const embedding = await generateEmbedding(chunks[i], jinaKey, openaiKey);
           sources.push({
             url: source.url,
             title: source.title,
             snippet: chunks[i].slice(0, 200),
             content: chunks[i],
             embedding,
+            jurisdictionLevel: source.level,
           });
+          console.log(`[Curated Discovery] Indexed: "${source.title}" (${source.level})`);
         } catch (err) {
           errors.push(`Failed to embed chunk from ${source.url}`);
         }
@@ -405,10 +623,12 @@ async function discoverFromCuratedSources(
     }
   }
 
+  console.log(`[Curated Discovery] Complete! Indexed ${sources.length} sources`);
+
   return {
     sources,
     query: request.query,
-    totalFound: categoryUrls.length,
+    totalFound: allCuratedSources.length,
     indexed: sources.length,
     errors,
   };
@@ -421,11 +641,12 @@ export const handler: Handler = async (event) => {
   const jinaKey = process.env.JINA_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
 
-  if (!openaiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
+  // Need at least one embedding API
+  if (!jinaKey && !openaiKey) {
+    throw new Error('No embedding API configured - set JINA_API_KEY or OPENAI_API_KEY');
   }
 
-  // Jina key is optional
+  // Jina is preferred for embeddings (free tier)
   const effectiveJinaKey = jinaKey || '';
 
   try {

@@ -2,6 +2,7 @@ import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 import { sourceDiscovery } from '../functions/source-discovery/resource';
 import { ragRetrieval } from '../functions/rag-retrieval/resource';
 import { suggestionGenerator } from '../functions/suggestion-generator/resource';
+import { documentUpload } from '../functions/document-upload/resource';
 
 const schema = a.schema({
   // Document - Main planning document
@@ -176,11 +177,25 @@ const schema = a.schema({
       domainId: a.string().required(),
       signals: a.string().required(), // JSON stringified SignalValues
       approverPov: a.string(),
+      suggestionCount: a.integer(), // Number of suggestions to generate
       retrievedSources: a.string(), // JSON stringified array
     })
     .returns(a.json())
     .authorization((allow) => [allow.publicApiKey()])
     .handler(a.handler.function(suggestionGenerator)),
+
+  // Document Upload - Process uploaded documents and extract text
+  uploadDocument: a
+    .query()
+    .arguments({
+      domainId: a.string().required(),
+      fileName: a.string().required(),
+      fileType: a.string().required(),
+      fileContent: a.string().required(), // base64 encoded
+    })
+    .returns(a.json())
+    .authorization((allow) => [allow.publicApiKey()])
+    .handler(a.handler.function(documentUpload)),
 });
 
 export type Schema = ClientSchema<typeof schema>;

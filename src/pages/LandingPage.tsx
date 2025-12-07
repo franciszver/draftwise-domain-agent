@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store/hooks';
 import { validatePasscode, checkSession, clearError } from '../store/slices/authSlice';
 
@@ -7,6 +7,7 @@ export function LandingPage() {
   const [passcode, setPasscode] = useState('');
   const dispatch = useAppDispatch();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isAuthenticated, loading, error } = useAppSelector((state) => state.auth);
 
   useEffect(() => {
@@ -15,11 +16,21 @@ export function LandingPage() {
   }, [dispatch]);
 
   useEffect(() => {
+    // LOCAL TESTING BYPASS: ?bypass=true on localhost auto-logs in
+    const isBypass = searchParams.get('bypass') === 'true';
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+    if (isBypass && isLocalhost && !isAuthenticated) {
+      // Auto-login with the test passcode
+      dispatch(validatePasscode('draftwise2024'));
+      return;
+    }
+
     // Redirect if already authenticated
     if (isAuthenticated) {
-      navigate('/editor');
+      navigate('/documents');
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, navigate, searchParams, dispatch]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

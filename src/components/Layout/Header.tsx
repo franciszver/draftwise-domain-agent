@@ -14,7 +14,7 @@ export function Header({ onNewDocument }: HeaderProps) {
   const { currentDocument, isAutosaving } = useAppSelector((state) => state.document);
   const { isAdmin } = useAppSelector((state) => state.auth);
   const { rightPanelOpen } = useAppSelector((state) => state.ui);
-  
+
   const [showAdminPrompt, setShowAdminPrompt] = useState(false);
   const [adminCode, setAdminCode] = useState('');
   const [adminError, setAdminError] = useState<string | null>(null);
@@ -73,6 +73,16 @@ export function Header({ onNewDocument }: HeaderProps) {
 
         {/* Right section */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/documents')}
+            className="btn-ghost btn-sm"
+          >
+            <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            </svg>
+            Documents
+          </button>
+
           <button
             onClick={onNewDocument}
             className="btn-ghost btn-sm"

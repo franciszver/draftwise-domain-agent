@@ -7,6 +7,7 @@ import { domainPrep } from './functions/domain-prep/resource';
 import { sourceDiscovery } from './functions/source-discovery/resource';
 import { shareLink } from './functions/share-link/resource';
 import { retentionCleanup } from './functions/retention-cleanup/resource';
+import { documentUpload } from './functions/document-upload/resource';
 
 const backend = defineBackend({
   data,
@@ -17,6 +18,7 @@ const backend = defineBackend({
   sourceDiscovery,
   shareLink,
   retentionCleanup,
+  documentUpload,
 });
 
 // Add custom outputs for the frontend

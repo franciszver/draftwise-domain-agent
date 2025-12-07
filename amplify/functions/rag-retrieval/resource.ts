@@ -4,6 +4,7 @@ export const ragRetrieval = defineFunction({
   name: 'rag-retrieval',
   entry: './handler.ts',
   environment: {
+    JINA_API_KEY: secret('JINA_API_KEY'),
     OPENAI_API_KEY: secret('OPENAI_API_KEY'),
   },
   timeoutSeconds: 120,

@@ -1156,11 +1156,49 @@
               "type": "String",
               "isRequired": false
             },
+            "suggestionCount": {
+              "name": "suggestionCount",
+              "isArray": false,
+              "type": "Int",
+              "isRequired": false
+            },
             "retrievedSources": {
               "name": "retrievedSources",
               "isArray": false,
               "type": "String",
               "isRequired": false
+            }
+          }
+        },
+        "uploadDocument": {
+          "name": "uploadDocument",
+          "isArray": false,
+          "type": "AWSJSON",
+          "isRequired": false,
+          "arguments": {
+            "domainId": {
+              "name": "domainId",
+              "isArray": false,
+              "type": "String",
+              "isRequired": true
+            },
+            "fileName": {
+              "name": "fileName",
+              "isArray": false,
+              "type": "String",
+              "isRequired": true
+            },
+            "fileType": {
+              "name": "fileType",
+              "isArray": false,
+              "type": "String",
+              "isRequired": true
+            },
+            "fileContent": {
+              "name": "fileContent",
+              "isArray": false,
+              "type": "String",
+              "isRequired": true
             }
           }
         }

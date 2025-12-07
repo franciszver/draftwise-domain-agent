@@ -10,6 +10,7 @@ interface AdminConfig {
   preferredAiProvider: 'openai' | 'openrouter';
   preferredModel: string;
   retentionDays: number;
+  maxSourcesPerCategory: number;
 }
 
 export function AdminPage() {
@@ -17,13 +18,34 @@ export function AdminPage() {
   const dispatch = useAppDispatch();
   const { isAdmin } = useAppSelector((state) => state.auth);
 
-  const [config, setConfig] = useState<AdminConfig>({
-    passcode: '********',
-    maxActiveSessions: 10,
-    maxReadOnlyLinks: 50,
-    preferredAiProvider: 'openai',
-    preferredModel: 'gpt-4o',
-    retentionDays: 3,
+  // Load config from localStorage or use defaults
+  const [config, setConfig] = useState<AdminConfig>(() => {
+    const saved = localStorage.getItem('adminConfig');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return {
+          passcode: '********',
+          maxActiveSessions: parsed.maxActiveSessions || 10,
+          maxReadOnlyLinks: parsed.maxReadOnlyLinks || 50,
+          preferredAiProvider: parsed.preferredAiProvider || 'openrouter',
+          preferredModel: parsed.preferredModel || 'gpt-4o',
+          retentionDays: parsed.retentionDays || 3,
+          maxSourcesPerCategory: parsed.maxSourcesPerCategory || 20,
+        };
+      } catch {
+        // Fall through to defaults
+      }
+    }
+    return {
+      passcode: '********',
+      maxActiveSessions: 10,
+      maxReadOnlyLinks: 50,
+      preferredAiProvider: 'openrouter',
+      preferredModel: 'gpt-4o',
+      retentionDays: 3,
+      maxSourcesPerCategory: 20,
+    };
   });
 
   const [showPasscodeInput, setShowPasscodeInput] = useState(false);
@@ -56,8 +78,18 @@ export function AdminPage() {
 
   const handleSaveConfig = async () => {
     setSaving(true);
+    // Save to localStorage for persistence
+    const configToSave = {
+      maxActiveSessions: config.maxActiveSessions,
+      maxReadOnlyLinks: config.maxReadOnlyLinks,
+      preferredAiProvider: config.preferredAiProvider,
+      preferredModel: config.preferredModel,
+      retentionDays: config.retentionDays,
+      maxSourcesPerCategory: config.maxSourcesPerCategory,
+    };
+    localStorage.setItem('adminConfig', JSON.stringify(configToSave));
     // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     setSaving(false);
   };
 
@@ -233,6 +265,26 @@ export function AdminPage() {
                 />
                 <p className="text-xs text-slate-500 mt-1">
                   Documents will be automatically purged after this period
+                </p>
+              </div>
+
+              <div>
+                <label className="label">Max Sources Per Category</label>
+                <input
+                  type="number"
+                  value={config.maxSourcesPerCategory}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      maxSourcesPerCategory: parseInt(e.target.value) || 10,
+                    }))
+                  }
+                  className="input"
+                  min="5"
+                  max="50"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Number of regulatory sources to discover per category (federal + state combined)
                 </p>
               </div>
             </div>

@@ -23,21 +23,25 @@ export interface Document {
 
 interface DocumentState {
   currentDocument: Document | null;
+  allDocuments: Document[];
   snapshots: Snapshot[];
   editorState: unknown | null;
   isDirty: boolean;
   isAutosaving: boolean;
   loading: boolean;
+  loadingAll: boolean;
   error: string | null;
 }
 
 const initialState: DocumentState = {
   currentDocument: null,
+  allDocuments: [],
   snapshots: [],
   editorState: null,
   isDirty: false,
   isAutosaving: false,
   loading: false,
+  loadingAll: false,
   error: null,
 };
 
@@ -160,6 +164,77 @@ export const loadSnapshots = createAsyncThunk(
   }
 );
 
+export const loadAllDocuments = createAsyncThunk(
+  'document/loadAll',
+  async (_, { rejectWithValue }) => {
+    try {
+      const documents: Document[] = [];
+      // Iterate through localStorage to find all documents
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('doc_')) {
+          const stored = localStorage.getItem(key);
+          if (stored) {
+            try {
+              const doc = JSON.parse(stored) as Document;
+              documents.push(doc);
+            } catch {
+              // Skip invalid entries
+            }
+          }
+        }
+      }
+      // Sort by updatedAt descending (newest first)
+      documents.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      return documents;
+    } catch (error) {
+      return rejectWithValue('Failed to load documents');
+    }
+  }
+);
+
+export const deleteDocument = createAsyncThunk(
+  'document/delete',
+  async (documentId: string, { rejectWithValue }) => {
+    try {
+      // Remove document and its snapshots
+      localStorage.removeItem(`doc_${documentId}`);
+      localStorage.removeItem(`snapshots_${documentId}`);
+      return documentId;
+    } catch (error) {
+      return rejectWithValue('Failed to delete document');
+    }
+  }
+);
+
+export const duplicateDocument = createAsyncThunk(
+  'document/duplicate',
+  async (documentId: string, { rejectWithValue }) => {
+    try {
+      const stored = localStorage.getItem(`doc_${documentId}`);
+      if (!stored) {
+        return rejectWithValue('Document not found');
+      }
+
+      const original = JSON.parse(stored) as Document;
+      const now = new Date().toISOString();
+      const duplicate: Document = {
+        ...original,
+        id: uuidv4(),
+        title: `${original.title} (Copy)`,
+        createdAt: now,
+        updatedAt: now,
+        lastAutosaveAt: null,
+      };
+
+      localStorage.setItem(`doc_${duplicate.id}`, JSON.stringify(duplicate));
+      return duplicate;
+    } catch (error) {
+      return rejectWithValue('Failed to duplicate document');
+    }
+  }
+);
+
 const documentSlice = createSlice({
   name: 'document',
   initialState,
@@ -249,6 +324,33 @@ const documentSlice = createSlice({
       // Create snapshot
       .addCase(createSnapshot.fulfilled, (state, action: PayloadAction<Snapshot>) => {
         state.snapshots = [action.payload, ...state.snapshots].slice(0, MAX_SNAPSHOTS);
+      })
+      // Load all documents
+      .addCase(loadAllDocuments.pending, (state) => {
+        state.loadingAll = true;
+        state.error = null;
+      })
+      .addCase(loadAllDocuments.fulfilled, (state, action: PayloadAction<Document[]>) => {
+        state.loadingAll = false;
+        state.allDocuments = action.payload;
+      })
+      .addCase(loadAllDocuments.rejected, (state, action) => {
+        state.loadingAll = false;
+        state.error = action.payload as string;
+      })
+      // Delete document
+      .addCase(deleteDocument.fulfilled, (state, action: PayloadAction<string>) => {
+        state.allDocuments = state.allDocuments.filter((doc) => doc.id !== action.payload);
+        if (state.currentDocument?.id === action.payload) {
+          state.currentDocument = null;
+          state.snapshots = [];
+          state.editorState = null;
+          state.isDirty = false;
+        }
+      })
+      // Duplicate document
+      .addCase(duplicateDocument.fulfilled, (state, action: PayloadAction<Document>) => {
+        state.allDocuments = [action.payload, ...state.allDocuments];
       });
   },
 });

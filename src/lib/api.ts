@@ -44,6 +44,7 @@ export interface DiscoveredSource {
   title: string;
   snippet: string;
   content?: string;
+  jurisdictionLevel?: 'federal' | 'state' | 'local';
 }
 
 export interface DiscoveryResponse {
@@ -78,7 +79,12 @@ export async function discoverSources(request: DiscoveryRequest): Promise<Discov
     throw new Error('No data returned from source discovery');
   }
 
-  return response.data as DiscoveryResponse;
+  // GraphQL returns JSON as a string, need to parse it
+  const data = typeof response.data === 'string'
+    ? JSON.parse(response.data)
+    : response.data;
+
+  return data as DiscoveryResponse;
 }
 
 // ----- RAG Retrieval -----
@@ -127,7 +133,12 @@ export async function retrieveSources(request: RetrievalRequest): Promise<Retrie
     throw new Error('No data returned from source retrieval');
   }
 
-  return response.data as RetrievalResponse;
+  // GraphQL returns JSON as a string, need to parse it
+  const data = typeof response.data === 'string'
+    ? JSON.parse(response.data)
+    : response.data;
+
+  return data as RetrievalResponse;
 }
 
 // ----- Suggestion Generation -----
@@ -144,6 +155,7 @@ export interface GenerationRequest {
   domainId: string;
   signals: SignalValues;
   approverPov?: string;
+  suggestionCount?: number;
   retrievedSources?: Array<{
     url: string;
     title: string;
@@ -180,6 +192,7 @@ export async function generateSuggestions(request: GenerationRequest): Promise<G
     domainId: request.domainId,
     signals: JSON.stringify(request.signals),
     approverPov: request.approverPov,
+    suggestionCount: request.suggestionCount || 5,
     retrievedSources: request.retrievedSources ? JSON.stringify(request.retrievedSources) : undefined,
   });
 
@@ -191,7 +204,12 @@ export async function generateSuggestions(request: GenerationRequest): Promise<G
     throw new Error('No data returned from suggestion generation');
   }
 
-  return response.data as GenerationResponse;
+  // GraphQL returns JSON as a string, need to parse it
+  const data = typeof response.data === 'string'
+    ? JSON.parse(response.data)
+    : response.data;
+
+  return data as GenerationResponse;
 }
 
 // ----- Data Model Operations -----
@@ -284,4 +302,57 @@ export async function saveDomain(domain: {
     });
     return response.data;
   }
+}
+
+// ----- Document Upload -----
+
+export interface UploadRequest {
+  domainId: string;
+  fileName: string;
+  fileType: string;
+  fileContent: string; // base64 encoded
+}
+
+export interface UploadedSource {
+  id: string;
+  url: string;
+  title: string;
+  content: string;
+  category: string;
+}
+
+export interface UploadResponse {
+  success: boolean;
+  source?: UploadedSource;
+  error?: string;
+}
+
+export async function uploadDocument(request: UploadRequest): Promise<UploadResponse> {
+  const c = getClient();
+
+  if (!c) {
+    throw new Error('Backend not available');
+  }
+
+  const response = await c.queries.uploadDocument({
+    domainId: request.domainId,
+    fileName: request.fileName,
+    fileType: request.fileType,
+    fileContent: request.fileContent,
+  });
+
+  if (response.errors && response.errors.length > 0) {
+    throw new Error(response.errors.map(e => e.message).join(', '));
+  }
+
+  if (!response.data) {
+    throw new Error('No data returned from document upload');
+  }
+
+  // GraphQL returns JSON as a string, need to parse it
+  const data = typeof response.data === 'string'
+    ? JSON.parse(response.data)
+    : response.data;
+
+  return data as UploadResponse;
 }

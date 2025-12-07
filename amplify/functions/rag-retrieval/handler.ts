@@ -42,30 +42,62 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Generate embedding for the query
+// Generate embedding for the query using Jina AI
 async function generateQueryEmbedding(
   text: string,
-  apiKey: string
+  jinaKey: string,
+  openaiKey?: string
 ): Promise<number[]> {
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'text-embedding-3-small',
-      input: text,
-    }),
-  });
+  // Try Jina first (free tier available)
+  if (jinaKey) {
+    try {
+      const response = await fetch('https://api.jina.ai/v1/embeddings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${jinaKey}`,
+        },
+        body: JSON.stringify({
+          model: 'jina-embeddings-v3',
+          task: 'retrieval.query',
+          input: [text],
+        }),
+      });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Embedding API error: ${error}`);
+      if (response.ok) {
+        const data = await response.json();
+        return data.data[0].embedding;
+      }
+      console.warn('Jina embedding failed, trying OpenAI fallback');
+    } catch (err) {
+      console.warn('Jina embedding error:', err);
+    }
   }
 
-  const data = await response.json();
-  return data.data[0].embedding;
+  // Fallback to OpenAI if Jina fails and OpenAI key is available
+  if (openaiKey) {
+    const response = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openaiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'text-embedding-3-small',
+        input: text,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI Embedding API error: ${error}`);
+    }
+
+    const data = await response.json();
+    return data.data[0].embedding;
+  }
+
+  throw new Error('No embedding API available - configure JINA_API_KEY or OPENAI_API_KEY');
 }
 
 // Fetch sources from DynamoDB (simplified - in production use proper SDK)
@@ -89,12 +121,13 @@ async function fetchSources(
 // Main retrieval function
 async function retrieveSources(
   request: RetrievalRequest,
-  apiKey: string
+  jinaKey: string,
+  openaiKey?: string
 ): Promise<RetrievalResponse> {
   const topK = request.topK || 10;
 
   // Generate query embedding
-  const queryEmbedding = await generateQueryEmbedding(request.query, apiKey);
+  const queryEmbedding = await generateQueryEmbedding(request.query, jinaKey, openaiKey);
 
   // Fetch all sources for the domain
   const sources = await fetchSources(request.domainId, request.categories);
@@ -136,14 +169,15 @@ async function retrieveSources(
 // Main handler
 export const handler: Handler = async (event) => {
   const request = event.arguments || event;
-  const apiKey = process.env.OPENAI_API_KEY;
+  const jinaKey = process.env.JINA_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
 
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
+  if (!jinaKey && !openaiKey) {
+    throw new Error('No embedding API configured - set JINA_API_KEY or OPENAI_API_KEY');
   }
 
   try {
-    return await retrieveSources(request as RetrievalRequest, apiKey);
+    return await retrieveSources(request as RetrievalRequest, jinaKey || '', openaiKey);
   } catch (error) {
     console.error('RAG Retrieval error:', error);
     throw error;

@@ -12,6 +12,7 @@ export interface Suggestion {
   confidence: number;
   pinned: boolean;
   superseded: boolean;
+  archived: boolean;
   createdAt: string;
   refreshedAt: string | null;
 }
@@ -33,8 +34,10 @@ export type ApproverPOV =
 
 interface SuggestionsState {
   suggestions: Suggestion[];
+  archivedSuggestions: Suggestion[];
   signals: SignalValues;
   approverPov: ApproverPOV;
+  suggestionCount: number;
   isGenerating: boolean;
   lastGeneratedAt: string | null;
   error: string | null;
@@ -42,12 +45,14 @@ interface SuggestionsState {
 
 const initialState: SuggestionsState = {
   suggestions: [],
+  archivedSuggestions: [],
   signals: {
     formality: 'moderate',
     riskAppetite: 'moderate',
     complianceStrictness: 'full',
   },
   approverPov: null,
+  suggestionCount: 5,
   isGenerating: false,
   lastGeneratedAt: null,
   error: null,
@@ -90,6 +95,7 @@ function generateMockSuggestions(
       confidence: 0.92,
       pinned: false,
       superseded: false,
+      archived: false,
       createdAt: new Date().toISOString(),
       refreshedAt: null,
     },
@@ -107,6 +113,7 @@ Environmental regulations for power generation may apply if on-site generation i
       confidence: 0.85,
       pinned: false,
       superseded: false,
+      archived: false,
       createdAt: new Date().toISOString(),
       refreshedAt: null,
     },
@@ -126,6 +133,7 @@ Environmental regulations for power generation may apply if on-site generation i
       confidence: 0.88,
       pinned: false,
       superseded: false,
+      archived: false,
       createdAt: new Date().toISOString(),
       refreshedAt: null,
     },
@@ -135,7 +143,7 @@ Environmental regulations for power generation may apply if on-site generation i
 export const generateSuggestions = createAsyncThunk(
   'suggestions/generate',
   async (
-    { documentId, content, domainId }: { documentId: string; content: string; domainId: string },
+    { documentId, content, domainId, appendMode = false }: { documentId: string; content: string; domainId: string; appendMode?: boolean },
     { getState, rejectWithValue }
   ) => {
     try {
@@ -143,88 +151,132 @@ export const generateSuggestions = createAsyncThunk(
         suggestions: SuggestionsState;
         domain: { sources: Array<{ url: string; title: string; category: string }>; useRealBackend: boolean };
       };
-      const { signals, approverPov } = state.suggestions;
-      const { sources, useRealBackend } = state.domain;
+      const { signals, approverPov, suggestionCount } = state.suggestions;
+      const { sources } = state.domain;
 
       // Get current valid source URLs for filtering
       const validSourceUrls = new Set(sources.map((s) => s.url));
 
-      // Try to use real backend
-      if (useRealBackend) {
+      // Always try real backend first (don't rely on useRealBackend flag)
+      try {
+        // First, retrieve relevant sources using RAG
+        let retrievedSources: Array<{ url: string; title: string; content: string; category: string }> = [];
+
+        console.log(`[Suggestions] Available indexed sources: ${sources.length}`);
+
         try {
-          // First, retrieve relevant sources using RAG
-          let retrievedSources: Array<{ url: string; title: string; content: string; category: string }> = [];
+          const ragResponse = await api.retrieveSources({
+            query: content.slice(0, 2000), // Use first 2000 chars as query
+            domainId,
+            topK: 10,
+          });
 
-          try {
-            const ragResponse = await api.retrieveSources({
-              query: content.slice(0, 2000), // Use first 2000 chars as query
-              domainId,
-              topK: 5,
-            });
-
+          if (ragResponse.results && ragResponse.results.length > 0) {
             retrievedSources = ragResponse.results.map((r) => ({
               url: r.url,
               title: r.title,
               content: r.content,
               category: r.category,
             }));
-          } catch {
-            // RAG retrieval failed, continue with sources from domain
-            retrievedSources = sources.slice(0, 5).map((s) => ({
+            console.log(`[Suggestions] RAG retrieved ${retrievedSources.length} sources`);
+          } else {
+            // RAG returned empty - use indexed sources from frontend state
+            console.log('[Suggestions] RAG returned 0 results, using indexed sources directly');
+            retrievedSources = sources.slice(0, 10).map((s) => ({
               url: s.url,
               title: s.title,
-              content: '', // No content available
+              content: '', // Content not available in frontend state
               category: s.category,
             }));
+            console.log(`[Suggestions] Using ${retrievedSources.length} indexed sources`);
           }
+        } catch (ragError) {
+          console.warn('[Suggestions] RAG retrieval failed, using indexed sources:', ragError);
+          // RAG retrieval failed, continue with sources from domain
+          retrievedSources = sources.slice(0, 10).map((s) => ({
+            url: s.url,
+            title: s.title,
+            content: '', // No content available
+            category: s.category,
+          }));
+          console.log(`[Suggestions] Fallback to ${retrievedSources.length} indexed sources`);
+        }
 
-          // Generate suggestions using AI
-          const response = await api.generateSuggestions({
-            documentId,
-            documentContent: content,
-            domainId,
-            signals,
-            approverPov: approverPov || undefined,
-            retrievedSources,
+        console.log('[Suggestions] Sources being sent to AI:', retrievedSources.map(s => s.url));
+
+        // Generate suggestions using AI
+        console.log('[Suggestions] Calling generateSuggestions API...');
+        const response = await api.generateSuggestions({
+          documentId,
+          documentContent: content,
+          domainId,
+          signals,
+          approverPov: approverPov || undefined,
+          retrievedSources,
+          suggestionCount,
+        });
+
+        console.log(`[Suggestions] API returned ${response.suggestions?.length || 0} suggestions`);
+        console.log('[Suggestions] Raw API response:', JSON.stringify(response, null, 2).slice(0, 1000));
+
+        // Check if we got valid suggestions
+        if (!response.suggestions || !Array.isArray(response.suggestions) || response.suggestions.length === 0) {
+          console.error('[Suggestions] No valid suggestions in response:', response);
+          throw new Error('No suggestions returned from AI');
+        }
+
+        // Convert response to Suggestion format
+        const suggestions: Suggestion[] = response.suggestions.map((s) => {
+          // Log what the AI returned for debugging
+          console.log(`[Suggestions] Processing suggestion: "${s.title}"`);
+          console.log(`[Suggestions] Raw sourceRefs from AI:`, s.sourceRefs);
+
+          // Filter sourceRefs to only include valid URLs
+          // We now accept any valid URL (not just ones matching indexed sources)
+          // This allows the AI to cite sources it found relevant
+          const filteredRefs = (s.sourceRefs || []).filter((ref: string) => {
+            try {
+              // Check if it's a valid URL
+              const url = new URL(ref);
+              // Must be http or https
+              if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+                console.log(`[Suggestions] Filtered out non-http URL: ${ref}`);
+                return false;
+              }
+              return true;
+            } catch {
+              console.log(`[Suggestions] Filtered out invalid URL: ${ref}`);
+              return false;
+            }
           });
 
-          // Convert response to Suggestion format
-          const suggestions: Suggestion[] = response.suggestions.map((s) => ({
+          console.log(`[Suggestions] Filtered sourceRefs:`, filteredRefs);
+
+          return {
             id: s.id,
             documentId,
             type: s.type,
             title: s.title,
             content: s.content,
-            sourceRefs: s.sourceRefs.filter((ref) => {
-              // Only include sources that are still valid
-              for (const validUrl of validSourceUrls) {
-                try {
-                  const refHost = new URL(ref).hostname;
-                  const validHost = new URL(validUrl).hostname;
-                  if (refHost === validHost) return true;
-                } catch {
-                  // Invalid URL
-                }
-              }
-              return false;
-            }),
+            sourceRefs: filteredRefs,
             confidence: s.confidence,
             pinned: false,
             superseded: false,
+            archived: false,
             createdAt: new Date().toISOString(),
             refreshedAt: null,
-          }));
+          };
+        });
 
-          return suggestions;
-        } catch (error) {
-          console.warn('Backend suggestion generation failed, falling back to mock:', error);
-          // Fall through to mock generation
-        }
+        return { suggestions, appendMode };
+      } catch (error) {
+        console.warn('Backend suggestion generation failed, falling back to mock:', error);
+        // Fall through to mock generation
       }
 
       // Fallback: Generate mock suggestions
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      return generateMockSuggestions(documentId, validSourceUrls);
+      return { suggestions: generateMockSuggestions(documentId, validSourceUrls), appendMode };
     } catch (error) {
       return rejectWithValue('Failed to generate suggestions');
     }
@@ -268,10 +320,31 @@ const suggestionsSlice = createSlice({
     setApproverPov: (state, action: PayloadAction<ApproverPOV>) => {
       state.approverPov = action.payload;
     },
+    setSuggestionCount: (state, action: PayloadAction<number>) => {
+      state.suggestionCount = action.payload;
+    },
     togglePin: (state, action: PayloadAction<string>) => {
       const suggestion = state.suggestions.find((s) => s.id === action.payload);
       if (suggestion) {
         suggestion.pinned = !suggestion.pinned;
+      }
+    },
+    archiveSuggestion: (state, action: PayloadAction<string>) => {
+      const index = state.suggestions.findIndex((s) => s.id === action.payload);
+      if (index !== -1) {
+        const suggestion = state.suggestions[index];
+        suggestion.archived = true;
+        state.archivedSuggestions.push(suggestion);
+        state.suggestions.splice(index, 1);
+      }
+    },
+    unarchiveSuggestion: (state, action: PayloadAction<string>) => {
+      const index = state.archivedSuggestions.findIndex((s) => s.id === action.payload);
+      if (index !== -1) {
+        const suggestion = state.archivedSuggestions[index];
+        suggestion.archived = false;
+        state.suggestions.unshift(suggestion);
+        state.archivedSuggestions.splice(index, 1);
       }
     },
     supersedeSuggestion: (state, action: PayloadAction<string>) => {
@@ -292,14 +365,20 @@ const suggestionsSlice = createSlice({
         state.isGenerating = true;
         state.error = null;
       })
-      .addCase(generateSuggestions.fulfilled, (state, action: PayloadAction<Suggestion[]>) => {
+      .addCase(generateSuggestions.fulfilled, (state, action: PayloadAction<{ suggestions: Suggestion[]; appendMode: boolean }>) => {
         state.isGenerating = false;
-        // Mark old suggestions as superseded
-        state.suggestions.forEach((s) => {
-          s.superseded = true;
-        });
-        // Add new suggestions
-        state.suggestions = [...action.payload, ...state.suggestions.filter((s) => s.pinned)];
+        const { suggestions, appendMode } = action.payload;
+
+        if (appendMode) {
+          // Append mode: just add new suggestions to existing ones
+          state.suggestions = [...state.suggestions, ...suggestions];
+        } else {
+          // Replace mode: mark old as superseded and replace
+          state.suggestions.forEach((s) => {
+            s.superseded = true;
+          });
+          state.suggestions = [...suggestions, ...state.suggestions.filter((s) => s.pinned)];
+        }
         state.lastGeneratedAt = new Date().toISOString();
       })
       .addCase(generateSuggestions.rejected, (state, action) => {
@@ -319,7 +398,10 @@ const suggestionsSlice = createSlice({
 export const {
   setSignals,
   setApproverPov,
+  setSuggestionCount,
   togglePin,
+  archiveSuggestion,
+  unarchiveSuggestion,
   supersedeSuggestion,
   clearSuggestions,
 } = suggestionsSlice.actions;

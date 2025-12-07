@@ -180,21 +180,28 @@ export const handler: Handler = async (event) => {
   const openaiKey = process.env.OPENAI_API_KEY;
   const openrouterKey = process.env.OPENROUTER_API_KEY;
 
-  if (!openaiKey) {
-    throw new Error('OPENAI_API_KEY not configured');
-  }
-
   try {
     switch (action) {
       case 'completion': {
         const request = params as CompletionRequest;
-        if (request.provider === 'openrouter' && openrouterKey) {
+        // Default to OpenRouter for completions, fall back to OpenAI
+        if (request.provider === 'openai' && openaiKey) {
+          return await generateOpenAICompletion(request, openaiKey);
+        }
+        if (openrouterKey) {
           return await generateOpenRouterCompletion(request, openrouterKey);
         }
-        return await generateOpenAICompletion(request, openaiKey);
+        if (openaiKey) {
+          return await generateOpenAICompletion(request, openaiKey);
+        }
+        throw new Error('No AI API key configured (OPENROUTER_API_KEY or OPENAI_API_KEY)');
       }
 
       case 'embedding': {
+        // Embeddings always use OpenAI (OpenRouter doesn't have embeddings API)
+        if (!openaiKey) {
+          throw new Error('OPENAI_API_KEY required for embeddings');
+        }
         const request = params as EmbeddingRequest;
         return await generateEmbedding(request, openaiKey);
       }

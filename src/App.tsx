@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAppSelector } from './store/hooks';
 import { LandingPage } from './pages/LandingPage';
 import { EditorPage } from './pages/EditorPage';
+import { DocumentsPage } from './pages/DocumentsPage';
 import { AdminPage } from './pages/AdminPage';
 import { SharedViewPage } from './pages/SharedViewPage';
 
@@ -38,6 +39,14 @@ function App() {
         <Route path="/shared/:token" element={<SharedViewPage />} />
 
         {/* Protected routes */}
+        <Route
+          path="/documents"
+          element={
+            <ProtectedRoute>
+              <DocumentsPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/editor"
           element={

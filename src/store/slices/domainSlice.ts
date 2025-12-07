@@ -8,6 +8,7 @@ export interface RegulatorySource {
   title: string;
   category: string;
   status: 'pending' | 'fetching' | 'indexed' | 'error';
+  jurisdictionLevel?: 'federal' | 'state' | 'local'; // Tag for source level
 }
 
 export interface Domain {
@@ -256,60 +257,144 @@ export const prepareDomain = createAsyncThunk(
       addLog(`Categories: ${domain.selectedCategories.join(', ')}`);
 
       let allSources: RegulatorySource[] = [];
+      const seenUrls = new Set<string>(); // Track URLs to remove duplicates
       let useBackend = false;
+
+      // Build jurisdiction string including site/state if available
+      const jurisdictionStr = domain.site
+        ? `${domain.country} ${domain.site}`
+        : domain.country;
 
       // Try to use real backend
       try {
         addLog('Connecting to source discovery service...');
 
-        // Discover sources for each category
+        // Get maxSources from admin config (localStorage) or default to 20
+        let maxSourcesPerCategory = 20;
+        try {
+          const adminConfig = localStorage.getItem('adminConfig');
+          if (adminConfig) {
+            const parsed = JSON.parse(adminConfig);
+            maxSourcesPerCategory = parsed.maxSourcesPerCategory || 20;
+          }
+        } catch {
+          // Use default
+        }
+
+        // Discover sources for each category with retry logic
         for (const category of domain.selectedCategories) {
           addLog(`Searching for ${category} sources...`);
 
-          const response = await api.discoverSources({
-            domainId: domain.id,
-            query: `${domain.assetClass} ${category} regulations ${domain.country}`,
-            jurisdiction: domain.country,
-            category,
-            maxSources: 10,
-          });
+          // Include site/state in the search query for more specific results
+          const searchQuery = domain.site
+            ? `${domain.assetClass} ${category} regulations ${domain.site} ${domain.country}`
+            : `${domain.assetClass} ${category} regulations ${domain.country}`;
+
+          console.log(`[Discovery] Query: ${searchQuery}`);
+
+          // Try discovery with one retry on failure
+          let response = null;
+          let retryCount = 0;
+          const maxRetries = 1;
+
+          while (response === null && retryCount <= maxRetries) {
+            try {
+              if (retryCount > 0) {
+                addLog(`Retrying ${category} search (attempt ${retryCount + 1})...`);
+                console.log(`[Discovery] Retry ${retryCount} for ${category}`);
+                // Brief delay before retry
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+              }
+
+              response = await api.discoverSources({
+                domainId: domain.id,
+                query: searchQuery,
+                jurisdiction: jurisdictionStr,
+                category,
+                maxSources: maxSourcesPerCategory,
+              });
+            } catch (categoryError) {
+              console.error(`[Discovery] Error for ${category} (attempt ${retryCount + 1}):`, categoryError);
+              retryCount++;
+              if (retryCount > maxRetries) {
+                addLog(`Failed to discover ${category} sources after ${maxRetries + 1} attempts`);
+              }
+            }
+          }
+
+          // Skip this category if discovery failed after retries
+          if (!response) {
+            console.log(`[Discovery] Skipping ${category} - all attempts failed`);
+            continue;
+          }
 
           addLog(`Found ${response.indexed} sources for ${category}`);
 
-          // Convert to RegulatorySource format
-          const categorySources: RegulatorySource[] = response.sources.map((s, idx) => ({
-            id: `${category}-${idx}`,
-            url: s.url,
-            title: s.title,
-            category,
-            status: 'indexed' as const,
-          }));
+          // Convert to RegulatorySource format, filtering duplicates
+          let newCount = 0;
+          const categorySources: RegulatorySource[] = [];
+
+          for (const s of response.sources) {
+            // Normalize URL for deduplication (remove trailing slashes, fragments)
+            const normalizedUrl = s.url.replace(/\/$/, '').split('#')[0];
+
+            if (!seenUrls.has(normalizedUrl)) {
+              seenUrls.add(normalizedUrl);
+              const source: RegulatorySource = {
+                id: `${category}-${categorySources.length}`,
+                url: s.url,
+                title: s.title,
+                category,
+                status: 'indexed' as const,
+                jurisdictionLevel: s.jurisdictionLevel || 'federal', // Preserve jurisdiction level
+              };
+              categorySources.push(source);
+              newCount++;
+
+              // Log each source as it's found with jurisdiction level
+              const levelTag = s.jurisdictionLevel === 'state' ? '[State]' : '[Federal]';
+              console.log(`[Discovery] ${levelTag} Source found: "${s.title}" - ${s.url}`);
+            } else {
+              console.log(`[Discovery] Duplicate skipped: ${s.url}`);
+            }
+          }
 
           allSources = [...allSources, ...categorySources];
+          console.log(`[Discovery] Added ${newCount} unique sources for ${category} (${response.indexed - newCount} duplicates removed)`);
 
-          // Save sources to backend
-          for (const source of response.sources) {
-            try {
-              await api.createRegulatorySource({
-                domainId: domain.id,
-                url: source.url,
-                title: source.title,
-                content: source.content,
-                category,
-                jurisdiction: domain.country,
-                status: 'indexed',
-              });
-            } catch {
-              // Continue on individual source save failure
+          // Save unique sources to backend (categorySources already filtered)
+          for (const source of categorySources) {
+            const originalSource = response.sources.find(s => s.url === source.url);
+            if (originalSource) {
+              try {
+                await api.createRegulatorySource({
+                  domainId: domain.id,
+                  url: originalSource.url,
+                  title: originalSource.title,
+                  content: originalSource.content,
+                  category,
+                  jurisdiction: jurisdictionStr,
+                  status: 'indexed',
+                });
+              } catch {
+                // Continue on individual source save failure
+              }
             }
           }
         }
 
-        useBackend = true;
-        addLog(`Total sources indexed: ${allSources.length}`);
+        // Check if we got any sources from the backend
+        if (allSources.length > 0) {
+          useBackend = true;
+          addLog(`Total unique sources indexed: ${allSources.length}`);
+        } else {
+          // No sources found from backend, fall back to mock
+          throw new Error('No sources discovered from backend');
+        }
       } catch (error) {
-        // Fall back to mock sources
-        addLog('Backend unavailable, using curated sources...');
+        // Fall back to mock sources if backend failed or returned no sources
+        console.log('[Discovery] Falling back to mock sources:', error);
+        addLog('Backend unavailable or returned no sources, using curated sources...');
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         addLog('Loading curated regulatory sources...');
@@ -404,6 +489,16 @@ const domainSlice = createSlice({
         localStorage.setItem(`domain_${state.currentDomain.id}`, JSON.stringify(state.currentDomain));
       }
     },
+    addSource: (state, action: PayloadAction<RegulatorySource>) => {
+      state.sources.push(action.payload);
+      state.sourcesVersion += 1; // Trigger suggestion refresh
+      if (state.currentDomain) {
+        state.currentDomain.citationsIndexed = state.sources.length;
+        // Update localStorage
+        localStorage.setItem(`sources_${state.currentDomain.id}`, JSON.stringify(state.sources));
+        localStorage.setItem(`domain_${state.currentDomain.id}`, JSON.stringify(state.currentDomain));
+      }
+    },
     clearDomain: (state) => {
       state.currentDomain = null;
       state.sources = [];
@@ -461,5 +556,5 @@ const domainSlice = createSlice({
   },
 });
 
-export const { updatePrepProgress, setSources, removeSource, clearDomain, abortPreparation, setUseRealBackend } = domainSlice.actions;
+export const { updatePrepProgress, setSources, removeSource, addSource, clearDomain, abortPreparation, setUseRealBackend } = domainSlice.actions;
 export default domainSlice.reducer;
