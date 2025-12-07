@@ -12,11 +12,6 @@ export { DomainPanel } from './RightPanel/DomainPanel';
 export { SuggestionFeed } from './RightPanel/SuggestionFeed';
 export { HistoryPanel } from './RightPanel/HistoryPanel';
 
-// UI Components
-export { AccessibilityControls } from './UI/AccessibilityControls';
-export { LoadingSpinner } from './UI/LoadingSpinner';
-export { Toast, ToastContainer } from './UI/Toast';
-
 // Modals
 export { NewDocumentModal } from './Modals/NewDocumentModal';
 
