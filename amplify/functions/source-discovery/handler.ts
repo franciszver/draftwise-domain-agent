@@ -578,6 +578,57 @@ async function discoverFromCuratedSources(
   };
 }
 
+// Last resort fallback - return curated sources without embeddings
+// Used when all API calls fail
+function getStaticCuratedSources(
+  request: DiscoveryRequest
+): DiscoveryResponse {
+  const state = extractState(request.jurisdiction);
+  const stateKey = state ? `USA-${state}` : null;
+
+  const sources: DiscoveredSource[] = [];
+
+  // Get federal sources
+  const federalSources = CURATED_SOURCES['USA']?.[request.category] || [];
+  for (const s of federalSources) {
+    sources.push({
+      url: s.url,
+      title: s.title,
+      snippet: `Federal regulatory source for ${request.category}`,
+      content: `Regulatory source: ${s.title}\nURL: ${s.url}\n\nConsult this source directly for authoritative information.`,
+      jurisdictionLevel: 'federal',
+    });
+  }
+
+  // Get state sources if applicable
+  if (stateKey && CURATED_SOURCES[stateKey]) {
+    const stateSources = CURATED_SOURCES[stateKey][request.category] || [];
+    const seenUrls = new Set(sources.map(s => normalizeUrl(s.url)));
+
+    for (const s of stateSources) {
+      if (!seenUrls.has(normalizeUrl(s.url))) {
+        sources.push({
+          url: s.url,
+          title: s.title,
+          snippet: `${state} state regulatory source for ${request.category}`,
+          content: `Regulatory source: ${s.title}\nURL: ${s.url}\n\nConsult this source directly for authoritative information.`,
+          jurisdictionLevel: 'state',
+        });
+      }
+    }
+  }
+
+  console.log(`[Static Fallback] Returning ${sources.length} curated sources without embeddings`);
+
+  return {
+    sources,
+    query: request.query,
+    totalFound: sources.length,
+    indexed: sources.length,
+    errors: ['API keys not available - using static curated sources without embeddings'],
+  };
+}
+
 // Main handler
 export const handler: Handler = async (event) => {
   const request = event.arguments || event;
@@ -585,35 +636,53 @@ export const handler: Handler = async (event) => {
   const jinaKey = process.env.JINA_API_KEY;
   const openaiKey = process.env.OPENAI_API_KEY;
 
-  // Need at least one embedding API
+  console.log(`[Source Discovery] Handler invoked for category: ${(request as DiscoveryRequest).category}`);
+  console.log(`[Source Discovery] API keys configured: Brave=${!!braveKey}, Jina=${!!jinaKey}, OpenAI=${!!openaiKey}`);
+
+  const req = request as DiscoveryRequest;
+
+  // If no embedding API is available, use static fallback immediately
   if (!jinaKey && !openaiKey) {
-    throw new Error('No embedding API configured - set JINA_API_KEY or OPENAI_API_KEY');
+    console.warn('No embedding API configured - using static curated sources');
+    return getStaticCuratedSources(req);
   }
 
   // Jina is preferred for embeddings (free tier)
   const effectiveJinaKey = jinaKey || '';
 
   try {
+    let result: DiscoveryResponse;
+
     // If Brave API key is available, use full discovery
     if (braveKey) {
-      return await discoverSources(
-        request as DiscoveryRequest,
+      result = await discoverSources(
+        req,
         braveKey,
+        effectiveJinaKey,
+        openaiKey
+      );
+    } else {
+      // Otherwise, fall back to curated sources with embeddings
+      console.log('BRAVE_API_KEY not configured, using curated sources only');
+      result = await discoverFromCuratedSources(
+        req,
         effectiveJinaKey,
         openaiKey
       );
     }
 
-    // Otherwise, fall back to curated sources
-    console.log('BRAVE_API_KEY not configured, using curated sources only');
-    return await discoverFromCuratedSources(
-      request as DiscoveryRequest,
-      effectiveJinaKey,
-      openaiKey
-    );
+    // If we got 0 sources from API calls, use static fallback
+    if (result.sources.length === 0) {
+      console.warn('[Source Discovery] Got 0 sources from APIs, using static fallback');
+      return getStaticCuratedSources(req);
+    }
+
+    return result;
   } catch (error) {
     console.error('Source discovery error:', error);
-    throw error;
+    // Last resort - return static sources rather than failing
+    console.warn('[Source Discovery] Error occurred, using static fallback');
+    return getStaticCuratedSources(req);
   }
 };
 

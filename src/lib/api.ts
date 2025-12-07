@@ -62,6 +62,8 @@ export async function discoverSources(request: DiscoveryRequest): Promise<Discov
     throw new Error('Backend not available');
   }
 
+  console.log(`[API] Calling discoverSources for category: ${request.category}`);
+
   // Call the sourceDiscovery custom query
   const response = await c.queries.discoverSources({
     domainId: request.domainId,
@@ -71,7 +73,14 @@ export async function discoverSources(request: DiscoveryRequest): Promise<Discov
     maxSources: request.maxSources || 25,
   });
 
+  console.log(`[API] discoverSources response:`, {
+    hasErrors: response.errors && response.errors.length > 0,
+    hasData: !!response.data,
+    dataType: typeof response.data,
+  });
+
   if (response.errors && response.errors.length > 0) {
+    console.error('[API] discoverSources errors:', response.errors);
     throw new Error(response.errors.map(e => e.message).join(', '));
   }
 
@@ -83,6 +92,12 @@ export async function discoverSources(request: DiscoveryRequest): Promise<Discov
   const data = typeof response.data === 'string'
     ? JSON.parse(response.data)
     : response.data;
+
+  console.log(`[API] discoverSources parsed response:`, {
+    sourcesCount: data.sources?.length || 0,
+    indexed: data.indexed,
+    errors: data.errors,
+  });
 
   return data as DiscoveryResponse;
 }
